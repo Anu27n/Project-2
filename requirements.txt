@@ -1,0 +1,42 @@
+# Diabetic Retinopathy Detection - Dependencies
+
+# Deep Learning Frameworks
+torch>=2.0.0
+torchvision>=0.15.0
+timm>=0.9.0
+
+# Image Processing
+opencv-python>=4.8.0
+Pillow>=10.0.0
+albumentations>=1.3.0
+
+# Data Processing
+numpy>=1.24.0
+pandas>=2.0.0
+scikit-learn>=1.3.0
+
+# Visualization
+matplotlib>=3.7.0
+seaborn>=0.12.0
+
+# Experiment Tracking
+wandb>=0.15.0
+
+# Web Deployment
+fastapi>=0.100.0
+uvicorn>=0.23.0
+streamlit>=1.25.0
+python-multipart>=0.0.6
+
+# Jupyter Support
+jupyter>=1.0.0
+ipykernel>=6.25.0
+ipywidgets>=8.0.0
+
+# Utilities
+tqdm>=4.65.0
+pyyaml>=6.0
+python-dotenv>=1.0.0
+
+# Optional: For Kaggle dataset download
+kaggle>=1.5.0
