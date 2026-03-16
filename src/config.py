@@ -12,14 +12,13 @@ from pathlib import Path
 # ============================================================
 PROJECT_ROOT = Path(__file__).parent.parent
 DATA_DIR = PROJECT_ROOT / "data"
-RAW_DATA_DIR = DATA_DIR / "raw"
-PROCESSED_DATA_DIR = DATA_DIR / "processed"
-MODELS_DIR = PROJECT_ROOT / "models"
+APTOS_DIR = DATA_DIR / "aptos2019"
+MODELS_DIR = PROJECT_ROOT / "results" / "models"
 RESULTS_DIR = PROJECT_ROOT / "results"
 FIGURES_DIR = RESULTS_DIR / "figures"
+METRICS_DIR = RESULTS_DIR / "metrics"
 
-# Create directories if they don't exist
-for dir_path in [DATA_DIR, RAW_DATA_DIR, PROCESSED_DATA_DIR, MODELS_DIR, RESULTS_DIR, FIGURES_DIR]:
+for dir_path in [DATA_DIR, MODELS_DIR, RESULTS_DIR, FIGURES_DIR, METRICS_DIR]:
     dir_path.mkdir(parents=True, exist_ok=True)
 
 # ============================================================
@@ -36,7 +35,7 @@ DATASET_CONFIG = {
 # IMAGE PREPROCESSING
 # ============================================================
 PREPROCESSING_CONFIG = {
-    "image_size": 512,
+    "image_size": 224,
     "clahe_clip_limit": 2.0,
     "clahe_tile_size": 8,
     "ben_graham_sigma": 10,

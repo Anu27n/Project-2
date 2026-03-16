@@ -31,6 +31,7 @@ from typing import Dict, List, Optional, Tuple, Union
 import cv2
 import matplotlib
 matplotlib.use("Agg")
+import matplotlib.patches as mpatches
 import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
 import numpy as np
@@ -741,4 +742,21 @@ def visualize_all_classes(
     ax_leg.axis("off")
 
     patches = [
-        mpatches.Patch(color=CLASS_
+        mpatches.Patch(color=CLASS_COLORS[i], label=CLASS_NAMES[i])
+        for i in range(len(CLASS_NAMES))
+    ]
+    ax_leg.legend(handles=patches, loc="center", fontsize=10, facecolor="#0d0d1a",
+                  edgecolor="none", labelcolor="white")
+
+    plt.tight_layout()
+
+    if save_path is not None:
+        Path(save_path).parent.mkdir(parents=True, exist_ok=True)
+        plt.savefig(save_path, dpi=150, bbox_inches="tight", facecolor=fig.get_facecolor())
+        print(f"  💾 Saved: {save_path}")
+
+    if show:
+        plt.show()
+
+    plt.close(fig)
+    return fig

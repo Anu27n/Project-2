@@ -1,2 +1,55 @@
+# Python
 __pycache__/
-*.pyc
+*.py[cod]
+*$py.class
+*.egg-info/
+*.egg
+dist/
+build/
+.eggs/
+
+# Virtual environments
+venv/
+env/
+.env
+.venv/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.cursor/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Data (downloaded separately)
+data/aptos2019/
+data/raw/
+data/processed/
+data/external/
+*.zip
+
+# Model checkpoints (too large for git)
+results/models/*.pth
+models/*.pth
+*.onnx
+
+# Results figures (regenerated from notebooks)
+results/figures/
+
+# Logs
+*.log
+wandb/
+runs/
+
+# Secrets
+kaggle.json
+.env

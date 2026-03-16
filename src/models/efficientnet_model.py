@@ -227,7 +227,7 @@ class EfficientNetDR(nn.Module):
         """Freeze all backbone parameters (Phase 1: feature extraction)."""
         for param in self.backbone.parameters():
             param.requires_grad = False
-        print("✅ Backbone frozen - training classifier head only")
+        print("[OK] Backbone frozen - training classifier head only")
 
     def unfreeze_backbone(self, unfreeze_fraction: float = 1.0):
         """
@@ -252,7 +252,7 @@ class EfficientNetDR(nn.Module):
         )
         total = sum(p.numel() for p in self.backbone.parameters())
         print(
-            f"✅ Unfrozen {unfreeze_fraction * 100:.0f}% of backbone | "
+            f"[OK] Unfrozen {unfreeze_fraction * 100:.0f}% of backbone | "
             f"Trainable backbone params: {trainable:,} / {total:,}"
         )
 
@@ -393,7 +393,7 @@ class EnsembleDRModel(nn.Module):
         for model, path in zip(self.models, model_paths):
             checkpoint = torch.load(path, map_location=device)
             model.load_state_dict(checkpoint["model_state_dict"])
-            print(f"✅ Loaded weights from {path}")
+            print(f"[OK] Loaded weights from {path}")
 
 
 # ============================================================
@@ -471,7 +471,7 @@ def load_checkpoint(
         "best_qwk": checkpoint.get("best_qwk", 0.0),
     }
 
-    print(f"✅ Loaded checkpoint from epoch {metadata['epoch']}")
+    print(f"[OK] Loaded checkpoint from epoch {metadata['epoch']}")
     print(f"   Best Val Accuracy : {metadata['best_val_acc']:.4f}")
     print(f"   Best QWK          : {metadata['best_qwk']:.4f}")
 
@@ -601,5 +601,5 @@ if __name__ == "__main__":
     full_params = model.count_parameters()
     print(f"  After full unfreeze: trainable = {full_params['trainable']:,}")
 
-    print("\n✅ All model tests passed!")
+    print("\n[OK] All model tests passed!")
     print("=" * 65)

@@ -29,6 +29,8 @@ class DRDataset(Dataset):
         preprocessor: DRPreprocessor instance for image preprocessing
     """
     
+    SUPPORTED_EXTENSIONS = ['.png', '.jpg', '.jpeg']
+
     def __init__(
         self,
         df: pd.DataFrame,
@@ -36,35 +38,30 @@ class DRDataset(Dataset):
         transform: Optional[Callable] = None,
         preprocessor: Optional[DRPreprocessor] = None,
         img_size: int = 512,
-        file_extension: str = '.png'
+        file_extension: Optional[str] = None,
     ):
-        """
-        Initialize the dataset.
-        
-        Args:
-            df: DataFrame with 'id_code' and 'diagnosis' columns
-            image_dir: Directory containing the images
-            transform: Albumentations transform pipeline
-            preprocessor: DRPreprocessor instance (if None, creates default)
-            img_size: Target image size
-            file_extension: Image file extension (.png or .jpg)
-        """
         self.df = df.reset_index(drop=True)
         self.image_dir = Path(image_dir)
         self.transform = transform
         self.img_size = img_size
-        self.file_extension = file_extension
-        
-        # Initialize preprocessor if not provided
+        self.file_extension = file_extension or self._detect_extension()
+
         if preprocessor is None:
             self.preprocessor = DRPreprocessor(img_size=img_size)
         else:
             self.preprocessor = preprocessor
-        
-        # Class information
+
         self.num_classes = 5
         self.class_names = ['No DR', 'Mild', 'Moderate', 'Severe', 'Proliferative']
     
+    def _detect_extension(self) -> str:
+        """Auto-detect image file extension from the image directory."""
+        for ext in self.SUPPORTED_EXTENSIONS:
+            sample = self.df.iloc[0]['id_code']
+            if (self.image_dir / f"{sample}{ext}").exists():
+                return ext
+        return '.png'
+
     def __len__(self) -> int:
         return len(self.df)
     
@@ -104,7 +101,13 @@ class DRDataset(Dataset):
     def _load_image(self, image_path: Path) -> np.ndarray:
         """Load and preprocess a single image."""
         if not image_path.exists():
-            raise FileNotFoundError(f"Image not found: {image_path}")
+            for ext in self.SUPPORTED_EXTENSIONS:
+                alt = image_path.with_suffix(ext)
+                if alt.exists():
+                    image_path = alt
+                    break
+            else:
+                raise FileNotFoundError(f"Image not found: {image_path}")
         
         # Load image
         image = cv2.imread(str(image_path))
@@ -305,7 +308,7 @@ if __name__ == "__main__":
     # Create dataset
     dataset = DRDataset(
         df=sample_df,
-        image_dir='../data/raw',
+        image_dir='../data/aptos2019/train_images',
         transform=None,
         img_size=512
     )

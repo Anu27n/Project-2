@@ -26,16 +26,13 @@ from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 import torch
 import torch.nn as nn
-from torch.cuda.amp import GradScaler, autocast
+from torch.amp import GradScaler, autocast
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-# Add src to path so relative imports work when running standalone
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-
-from losses import WeightedFocalLoss, LabelSmoothingCrossEntropyLoss, compute_class_weights_from_labels
+from .losses import WeightedFocalLoss, LabelSmoothingCrossEntropyLoss, compute_class_weights_from_labels
 
 try:
     from sklearn.metrics import (
@@ -116,7 +113,7 @@ class EarlyStopping:
             if self.counter >= self.patience:
                 self.early_stop = True
                 if self.verbose:
-                    print("  [EarlyStopping] Triggered — stopping training.")
+                    print("  [EarlyStopping] Triggered - stopping training.")
 
         return self.early_stop
 
@@ -292,7 +289,7 @@ class DRTrainer:
 
         # ---- Mixed precision scaler ----
         self.use_amp = self.config.get("use_amp", True) and self.device.type == "cuda"
-        self.scaler = GradScaler(enabled=self.use_amp)
+        self.scaler = GradScaler("cuda", enabled=self.use_amp)
 
         # ---- Loss functions ----
         self.criterion = WeightedFocalLoss(
@@ -488,9 +485,8 @@ class DRTrainer:
 
             self.optimizer.zero_grad(set_to_none=True)
 
-            with autocast(enabled=self.use_amp):
+            with autocast("cuda", enabled=self.use_amp):
                 logits = self.model(images)
-                # Combined loss: 70% weighted focal + 30% label-smooth CE
                 focal = self.criterion(logits, labels)
                 ce    = self.ce_loss(logits, labels)
                 loss  = 0.70 * focal + 0.30 * ce
@@ -552,7 +548,7 @@ class DRTrainer:
             images = images.to(self.device, non_blocking=True)
             labels = labels.to(self.device, non_blocking=True)
 
-            with autocast(enabled=self.use_amp):
+            with autocast("cuda", enabled=self.use_amp):
                 logits = self.model(images)
                 focal = self.criterion(logits, labels)
                 ce    = self.ce_loss(logits, labels)
@@ -604,7 +600,7 @@ class DRTrainer:
 
         save_path = self.output_dir / f"model_{tag}.pth"
         torch.save(checkpoint, save_path)
-        print(f"  💾 Checkpoint saved → {save_path} (epoch {epoch})")
+        print(f"  Checkpoint saved -> {save_path} (epoch {epoch})")
 
     def load_checkpoint(self, path: str, strict: bool = True) -> Dict:
         """
@@ -631,7 +627,7 @@ class DRTrainer:
         self.best_val_loss= checkpoint.get("best_val_loss", float("inf"))
         self.history      = checkpoint.get("history", self.history)
 
-        print(f"✅ Loaded checkpoint from epoch {checkpoint['epoch']}")
+        print(f"[OK] Loaded checkpoint from epoch {checkpoint['epoch']}")
         return checkpoint
 
     # ----------------------------------------------------------
@@ -673,8 +669,8 @@ class DRTrainer:
             self.current_epoch += 1
             epoch_start = time.time()
 
-            print(f"\n  ── Epoch {self.current_epoch:03d} "
-                  f"[Phase {phase_key[-1]}: {epoch_in_phase}/{num_epochs}] ──")
+            print(f"\n  -- Epoch {self.current_epoch:03d} "
+                  f"[Phase {phase_key[-1]}: {epoch_in_phase}/{num_epochs}] --")
 
             # ---- Train ----
             train_metrics = self._train_epoch(train_loader, self.current_epoch)
@@ -728,7 +724,7 @@ class DRTrainer:
 
             # ---- Early Stopping ----
             if early_stopper(val_qwk):
-                print(f"\n  ⛔  Early stopping triggered at epoch {self.current_epoch}")
+                print(f"\n  [EarlyStop] Triggered at epoch {self.current_epoch}")
                 return True  # signal that ES fired
 
         return False  # phase completed normally
@@ -764,7 +760,7 @@ class DRTrainer:
         print("=" * 60)
 
         if resume_from:
-            print(f"\n⏩  Resuming from checkpoint: {resume_from}")
+            print(f"\n  Resuming from checkpoint: {resume_from}")
             self.load_checkpoint(resume_from)
 
         for phase_key in ["phase1", "phase2", "phase3"]:
@@ -775,7 +771,7 @@ class DRTrainer:
                 # Restore best weights before next phase
                 best_ckpt = self.output_dir / "model_best_qwk.pth"
                 if best_ckpt.exists():
-                    print(f"\n  🔄 Restoring best weights from {best_ckpt}")
+                    print(f"\n  Restoring best weights from {best_ckpt}")
                     self.model.load_state_dict(
                         torch.load(best_ckpt, map_location=self.device)["model_state_dict"]
                     )
@@ -796,7 +792,7 @@ class DRTrainer:
         history_path = self.output_dir / "training_history.json"
         with open(history_path, "w") as f:
             json.dump(self.history, f, indent=2)
-        print(f"\n  📊 Training history saved → {history_path}")
+        print(f"\n  Training history saved -> {history_path}")
 
         return self.history
 
@@ -828,4 +824,8 @@ class DRTrainer:
             f"Time: {elapsed:.1f}s"
         )
         print(
-            f"  Train │ Loss: {t_loss:.4f} │ Acc
+            f"  Train | Loss: {t_loss:.4f} | Acc: {t_acc:.4f} | QWK: {t_qwk:.4f}"
+        )
+        print(
+            f"  Val   | Loss: {v_loss:.4f} | Acc: {v_acc:.4f} | QWK: {v_qwk:.4f} | AUC: {v_auc:.4f}"
+        )
