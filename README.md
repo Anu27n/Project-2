@@ -21,6 +21,20 @@
 | 3 | Severe NPDR | Extensive haemorrhages, venous beading |
 | 4 | Proliferative DR | Neovascularisation, vitreous haemorrhage |
 
+## Preserving Notebook Outputs & Backups
+
+**Training takes a long time** — protect your work:
+
+1. **Backup notebooks with outputs** (run after training):
+   ```bash
+   python backup_notebooks.py
+   ```
+   Creates `backups/notebooks_backup_YYYYMMDD_HHMMSS.zip` with notebooks + results.
+
+2. **Keep outputs in git**: Ensure notebooks are committed *with* outputs. Avoid "Clear All Outputs" before committing.
+
+3. **Download the zip** from `backups/` to save locally if needed.
+
 ## Project Structure
 
 ```

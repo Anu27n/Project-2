@@ -24,6 +24,8 @@ env/
 
 # Jupyter
 .ipynb_checkpoints/
+# Backup archives (notebooks with outputs - download these locally)
+backups/
 
 # OS
 .DS_Store
