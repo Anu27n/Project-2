@@ -667,3 +667,9 @@ class DRMetricsEvaluator:
             print(f"  {'True → Predicted':<35} {'Count':>7} {'Penalty':>8} {'Cost':>8}")
             print(f"  {'-'*66}")
             for err in results["qwk_analysis"]["top_errors"][:5]:
+                true_c = err.get("true_class", "?")
+                pred_c = err.get("pred_class", "?")
+                cnt = err.get("count", 0)
+                pen = err.get("penalty", 0)
+                cost = err.get("total_cost", 0)
+                print(f"  {true_c} → {pred_c:<25} {cnt:>7} {pen:>8.4f} {cost:>8.2f}")
