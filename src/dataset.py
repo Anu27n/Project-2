@@ -9,9 +9,9 @@ import cv2
 import numpy as np
 import pandas as pd
 import torch
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import Dataset, DataLoader, WeightedRandomSampler
 from pathlib import Path
-from typing import Optional, Callable, Tuple, List
+from typing import Optional, Callable, Tuple, List, Dict
 import albumentations as A
 from albumentations.pytorch import ToTensorV2
 
@@ -39,12 +39,18 @@ class DRDataset(Dataset):
         preprocessor: Optional[DRPreprocessor] = None,
         img_size: int = 512,
         file_extension: Optional[str] = None,
+        enable_minority_synthesis: bool = False,
+        minority_classes: Optional[List[int]] = None,
+        synthesis_probability: float = 0.35,
     ):
         self.df = df.reset_index(drop=True)
         self.image_dir = Path(image_dir)
         self.transform = transform
         self.img_size = img_size
         self.file_extension = file_extension or self._detect_extension()
+        self.enable_minority_synthesis = enable_minority_synthesis
+        self.minority_classes = set(minority_classes or [])
+        self.synthesis_probability = synthesis_probability
 
         if preprocessor is None:
             self.preprocessor = DRPreprocessor(img_size=img_size)
@@ -53,6 +59,7 @@ class DRDataset(Dataset):
 
         self.num_classes = 5
         self.class_names = ['No DR', 'Mild', 'Moderate', 'Severe', 'Proliferative']
+        self.class_index_map = self._build_class_index_map()
     
     def _detect_extension(self) -> str:
         """Auto-detect image file extension from the image directory."""
@@ -83,6 +90,15 @@ class DRDataset(Dataset):
         
         # Load and preprocess image
         image = self._load_image(image_path)
+
+        # GAN-style minority synthesis: blend same-class peers with stochastic masks/noise.
+        label = int(row['diagnosis'])
+        if (
+            self.enable_minority_synthesis
+            and label in self.minority_classes
+            and np.random.rand() < self.synthesis_probability
+        ):
+            image = self._synthesize_minority_sample(idx, label, image)
         
         # Apply transforms
         if self.transform is not None:
@@ -93,10 +109,62 @@ class DRDataset(Dataset):
             image = torch.tensor(image, dtype=torch.float32).permute(2, 0, 1)
             image = image / 255.0
         
-        # Get label
-        label = int(row['diagnosis'])
-        
         return image, label
+
+    def _build_class_index_map(self) -> Dict[int, List[int]]:
+        class_index_map: Dict[int, List[int]] = {c: [] for c in range(5)}
+        for i, cls in enumerate(self.df['diagnosis'].astype(int).tolist()):
+            class_index_map.setdefault(cls, []).append(i)
+        return class_index_map
+
+    def _synthesize_minority_sample(
+        self,
+        idx: int,
+        label: int,
+        base_image: np.ndarray,
+    ) -> np.ndarray:
+        peers = self.class_index_map.get(label, [])
+        if len(peers) < 2:
+            return base_image
+
+        # Choose a different same-class peer image as synthesis source.
+        peer_idx = idx
+        for _ in range(5):
+            candidate = int(np.random.choice(peers))
+            if candidate != idx:
+                peer_idx = candidate
+                break
+
+        if peer_idx == idx:
+            return base_image
+
+        peer_row = self.df.iloc[peer_idx]
+        peer_name = str(peer_row['id_code']) + self.file_extension
+        peer_path = self.image_dir / peer_name
+
+        try:
+            peer_image = self._load_image(peer_path)
+        except Exception:
+            return base_image
+
+        h, w = base_image.shape[:2]
+
+        # Smooth random mask creates lesion-like local blending patterns.
+        rand_mask = np.random.rand(h, w).astype(np.float32)
+        sigma = float(np.random.uniform(4.0, 10.0))
+        rand_mask = cv2.GaussianBlur(rand_mask, (0, 0), sigmaX=sigma, sigmaY=sigma)
+        rand_mask = np.expand_dims(np.clip(rand_mask, 0.15, 0.85), axis=2)
+
+        synthetic = (
+            rand_mask * base_image.astype(np.float32)
+            + (1.0 - rand_mask) * peer_image.astype(np.float32)
+        )
+
+        # Mild stochastic texture to diversify synthetic minority examples.
+        noise = np.random.normal(loc=0.0, scale=4.0, size=synthetic.shape).astype(np.float32)
+        synthetic = np.clip(synthetic + noise, 0, 255).astype(np.uint8)
+
+        return synthetic
     
     def _load_image(self, image_path: Path) -> np.ndarray:
         """Load and preprocess a single image."""
@@ -214,7 +282,12 @@ def create_data_loaders(
     valid_dir: str,
     batch_size: int = 16,
     img_size: int = 512,
-    num_workers: int = 4
+    num_workers: int = 4,
+    use_weighted_sampler: bool = True,
+    enable_minority_synthesis: bool = True,
+    minority_ratio_threshold: float = 0.65,
+    synthesis_probability: float = 0.35,
+    pin_memory: bool = True,
 ) -> Tuple[DataLoader, DataLoader]:
     """
     Create training and validation data loaders.
@@ -231,12 +304,24 @@ def create_data_loaders(
     Returns:
         Tuple of (train_loader, valid_loader)
     """
+    train_labels = train_df['diagnosis'].astype(int).to_numpy()
+    class_counts = np.bincount(train_labels, minlength=5)
+    majority_count = int(class_counts.max()) if len(class_counts) > 0 else 0
+    minority_classes = [
+        i
+        for i, count in enumerate(class_counts)
+        if count > 0 and count < majority_count * minority_ratio_threshold
+    ]
+
     # Create datasets
     train_dataset = DRDataset(
         df=train_df,
         image_dir=train_dir,
         transform=get_train_transforms(img_size),
-        img_size=img_size
+        img_size=img_size,
+        enable_minority_synthesis=enable_minority_synthesis,
+        minority_classes=minority_classes,
+        synthesis_probability=synthesis_probability,
     )
     
     valid_dataset = DRDataset(
@@ -247,12 +332,19 @@ def create_data_loaders(
     )
     
     # Create data loaders
+    sampler = None
+    shuffle = True
+    if use_weighted_sampler:
+        sampler = create_weighted_sampler(train_labels, num_classes=5)
+        shuffle = False
+
     train_loader = DataLoader(
         train_dataset,
         batch_size=batch_size,
-        shuffle=True,
+        shuffle=shuffle,
+        sampler=sampler,
         num_workers=num_workers,
-        pin_memory=True,
+        pin_memory=pin_memory,
         drop_last=True
     )
     
@@ -261,7 +353,7 @@ def create_data_loaders(
         batch_size=batch_size,
         shuffle=False,
         num_workers=num_workers,
-        pin_memory=True
+        pin_memory=pin_memory
     )
     
     return train_loader, valid_loader
@@ -288,6 +380,22 @@ def compute_class_weights(labels: np.ndarray, num_classes: int = 5) -> torch.Ten
     weights = weights / weights.sum() * num_classes
     
     return torch.tensor(weights, dtype=torch.float32)
+
+
+def create_weighted_sampler(
+    labels: np.ndarray,
+    num_classes: int = 5,
+) -> WeightedRandomSampler:
+    """Create a class-balanced sampler for imbalanced training sets."""
+    class_weights = compute_class_weights(labels, num_classes=num_classes).numpy()
+    sample_weights = class_weights[labels.astype(int)]
+    sample_weights = torch.tensor(sample_weights, dtype=torch.double)
+
+    return WeightedRandomSampler(
+        weights=sample_weights,
+        num_samples=len(sample_weights),
+        replacement=True,
+    )
 
 
 if __name__ == "__main__":

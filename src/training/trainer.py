@@ -32,7 +32,7 @@ from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-from .losses import WeightedFocalLoss, LabelSmoothingCrossEntropyLoss, compute_class_weights_from_labels
+from .losses import WeightedFocalLoss, LabelSmoothingCrossEntropyLoss
 
 try:
     from sklearn.metrics import (
@@ -292,7 +292,12 @@ class DRTrainer:
         self.scaler = GradScaler("cuda", enabled=self.use_amp)
 
         # ---- Loss functions ----
+        class_weights = self.config.get("class_weights")
+        if class_weights is not None:
+            class_weights = torch.tensor(class_weights, dtype=torch.float32)
+
         self.criterion = WeightedFocalLoss(
+            class_weights=class_weights,
             gamma=self.config.get("focal_gamma", 2.0),
             num_classes=self.config.get("num_classes", 5),
         )

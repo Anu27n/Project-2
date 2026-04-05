@@ -48,6 +48,24 @@ def main():
         default=16,
         help="Batch size for evaluation",
     )
+    parser.add_argument(
+        "--profile-batch-size",
+        type=int,
+        default=1,
+        help="Batch size used for latency/FLOPs profiling",
+    )
+    parser.add_argument(
+        "--profile-warmup",
+        type=int,
+        default=8,
+        help="Warmup runs before measuring latency",
+    )
+    parser.add_argument(
+        "--profile-runs",
+        type=int,
+        default=30,
+        help="Number of timing runs for latency benchmark",
+    )
     args = parser.parse_args()
 
     csv_path, image_dir = find_data()
@@ -61,8 +79,9 @@ def main():
         print("Run training first: python run_train.py")
         return 1
 
-    from config import PREPROCESSING_CONFIG, get_device, set_seed
+    from config import PREPROCESSING_CONFIG, EVALUATION_CONFIG, get_device, set_seed
     from dataset import DRDataset, get_valid_transforms
+    from evaluation.computation import compute_efficiency_scores, profile_model_computation
     from evaluation.metrics import DRMetricsEvaluator
     from models.efficientnet_model import EfficientNetDR
 
@@ -102,6 +121,24 @@ def main():
 
     print(f"  Loaded checkpoint from epoch {ckpt.get('epoch', '?')}")
     print(f"  Device: {device}")
+
+    profile_batch_size = max(1, args.profile_batch_size)
+    profile_warmup = max(1, args.profile_warmup or EVALUATION_CONFIG.get("profile_warmup_runs", 8))
+    profile_runs = max(1, args.profile_runs or EVALUATION_CONFIG.get("profile_benchmark_runs", 30))
+    computation_profile = profile_model_computation(
+        model,
+        device=device,
+        input_size=img_size,
+        profile_batch_size=profile_batch_size,
+        warmup_runs=profile_warmup,
+        benchmark_runs=profile_runs,
+    )
+    print(
+        "  Computation profile: "
+        f"{computation_profile['gflops']:.2f} GFLOPs | "
+        f"{computation_profile['parameters_total'] / 1e6:.2f}M params | "
+        f"{computation_profile['latency_ms_mean']:.2f} ms/image"
+    )
 
     all_preds = []
     all_targets = []
@@ -146,9 +183,15 @@ def main():
     qwk = results.get("qwk_analysis", {})
 
     # Build per_class_metrics with TP/FP/FN/TN (for notebook 3)
-    from sklearn.metrics import confusion_matrix as sk_cm
     cm_raw = np.array(cm["raw"])
     class_names = ["No DR", "Mild", "Moderate", "Severe", "Proliferative"]
+
+    efficiency_scores = compute_efficiency_scores(
+        accuracy=ov["accuracy"],
+        qwk=ov["qwk"],
+        total_params=int(computation_profile["parameters_total"]),
+        flops=int(computation_profile["flops"]),
+    )
 
     per_class_metrics = {}
     for c, name in enumerate(class_names):
@@ -214,9 +257,32 @@ def main():
             "mean_specificity": ov["mean_specificity"],
             "top2_accuracy": ov.get("top2_accuracy", 0.0),
             "avg_precision_macro": ov.get("avg_precision_macro", 0.0),
+            "accuracy_per_gflop": efficiency_scores["accuracy_per_gflop"],
+            "qwk_per_gflop": efficiency_scores["qwk_per_gflop"],
+            "computation_efficiency_score": efficiency_scores["computation_efficiency_score"],
             "n_samples": n,
             "n_correct": int((y_true == y_pred).sum()),
             "n_incorrect": int((y_true != y_pred).sum()),
+        },
+        "computation_metrics": {
+            "profile_input_shape": computation_profile["input_shape"],
+            "device": computation_profile["device"],
+            "parameters_total": int(computation_profile["parameters_total"]),
+            "parameters_trainable": int(computation_profile["parameters_trainable"]),
+            "parameters_frozen": int(computation_profile["parameters_frozen"]),
+            "model_size_mb": float(computation_profile["model_size_mb"]),
+            "macs": int(computation_profile["macs"]),
+            "gmacs": float(computation_profile["gmacs"]),
+            "flops": int(computation_profile["flops"]),
+            "gflops": float(computation_profile["gflops"]),
+            "latency_ms_mean": float(computation_profile["latency_ms_mean"]),
+            "latency_ms_std": float(computation_profile["latency_ms_std"]),
+            "throughput_images_per_sec": float(computation_profile["throughput_images_per_sec"]),
+            "accuracy_per_gflop": efficiency_scores["accuracy_per_gflop"],
+            "qwk_per_gflop": efficiency_scores["qwk_per_gflop"],
+            "computation_efficiency_score": efficiency_scores["computation_efficiency_score"],
+            "efficiency_formula": "100 * (0.5 * accuracy + 0.5 * qwk) / (gflops * log(1 + params_m))",
+            "notes": "Theoretical (FLOPs/params) and practical (latency/throughput) metrics are both reported.",
         },
         "per_class_metrics": per_class_metrics,
         "confusion_matrix": {
@@ -240,8 +306,10 @@ def main():
                 "val_accuracy": ov["accuracy"],
                 "val_qwk": ov["qwk"],
                 "val_auc_roc": ov.get("auc_roc_macro", 0.0),
-                "params_M": 19.66,
-                "inference_ms": 38,
+                "params_M": round(computation_profile["parameters_total"] / 1e6, 2),
+                "gflops": round(computation_profile["gflops"], 3),
+                "inference_ms": round(computation_profile["latency_ms_mean"], 2),
+                "throughput_img_s": round(computation_profile["throughput_images_per_sec"], 2),
             },
         },
         "ablation_study": {
@@ -264,6 +332,11 @@ def main():
             "sensitivity": {"target": 0.85, "achieved": ov["mean_sensitivity"], "status": f"{'ACHIEVED' if ov['mean_sensitivity'] >= 0.85 else 'In Progress'}"},
             "specificity": {"target": 0.90, "achieved": ov["mean_specificity"], "status": f"{'ACHIEVED' if ov['mean_specificity'] >= 0.90 else 'In Progress'}"},
             "f1_weighted": {"target": 0.88, "achieved": ov["f1_weighted"], "status": f"In Progress — {100*ov['f1_weighted']/0.88:.1f}% of target"},
+            "compute_efficiency": {
+                "target": "Higher is better",
+                "achieved": efficiency_scores["computation_efficiency_score"],
+                "status": "Included for novelty: performance normalized by compute budget",
+            },
             "overall_verdict": "Evaluation from run_evaluate.py — matches notebook 2 training.",
         },
     }

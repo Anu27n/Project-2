@@ -30,6 +30,16 @@ def find_data():
     return None, None
 
 
+def print_split_distribution(df: pd.DataFrame, split_name: str):
+    counts = df["diagnosis"].value_counts().sort_index()
+    total = max(1, len(df))
+    print(f"\n  {split_name} class distribution:")
+    for cls in range(5):
+        c = int(counts.get(cls, 0))
+        pct = (100.0 * c) / total
+        print(f"    Class {cls}: {c:4d} ({pct:5.1f}%)")
+
+
 def main():
     csv_path, image_dir = find_data()
     if csv_path is None or image_dir is None:
@@ -41,6 +51,15 @@ def main():
         return 1
 
     df = pd.read_csv(csv_path)
+
+    # Prefer cGAN-augmented labels if available and enabled in config.
+    from config import TRAINING_CONFIG
+    augmented_csv = csv_path.parent / "train_augmented.csv"
+    if TRAINING_CONFIG.get("use_augmented_csv_if_available", True) and augmented_csv.exists():
+        csv_path = augmented_csv
+        df = pd.read_csv(csv_path)
+        print(f"  Using augmented CSV: {csv_path}")
+
     # APTOS uses 'id_code'; some CSVs use 'id_code' or similar
     if "id_code" not in df.columns and "image" in df.columns:
         df = df.rename(columns={"image": "id_code"})
@@ -60,12 +79,11 @@ def main():
     print(f"  Image directory: {img_dir_str}")
 
     # Import after path is set
-    from dataset import create_data_loaders
+    from dataset import create_data_loaders, compute_class_weights
     from models.efficientnet_model import EfficientNetDR
     from training.trainer import DRTrainer
     from config import (
         PREPROCESSING_CONFIG,
-        TRAINING_CONFIG,
         TRAINING_PHASES,
         get_device,
         set_seed,
@@ -73,6 +91,16 @@ def main():
 
     set_seed(TRAINING_CONFIG["seed"])
     device = get_device()
+
+    print_split_distribution(train_df, "Train")
+    print_split_distribution(valid_df, "Validation")
+
+    class_weights = compute_class_weights(
+        train_df["diagnosis"].to_numpy(),
+        num_classes=5,
+    ).tolist()
+    weights_str = ", ".join(f"{w:.3f}" for w in class_weights)
+    print(f"\n  Dynamic class weights (train split): [{weights_str}]")
 
     img_size = PREPROCESSING_CONFIG["image_size"]
     batch_size = min(TRAINING_CONFIG["batch_size"], len(train_df))
@@ -88,6 +116,11 @@ def main():
         batch_size=batch_size,
         img_size=img_size,
         num_workers=num_workers,
+        use_weighted_sampler=TRAINING_CONFIG.get("use_weighted_sampler", True),
+        enable_minority_synthesis=TRAINING_CONFIG.get("enable_minority_synthesis", True),
+        minority_ratio_threshold=TRAINING_CONFIG.get("minority_ratio_threshold", 0.65),
+        synthesis_probability=TRAINING_CONFIG.get("synthesis_probability", 0.35),
+        pin_memory=TRAINING_CONFIG.get("pin_memory", True),
     )
 
     model = EfficientNetDR(
@@ -110,8 +143,13 @@ def main():
         "gradient_clip": 1.0,
         "weight_decay": 1e-4,
         "focal_gamma": TRAINING_CONFIG.get("focal_gamma", 2.0),
+        "class_weights": class_weights,
         "early_stopping_patience": TRAINING_CONFIG.get("patience", 7),
         "early_stopping_min_delta": TRAINING_CONFIG.get("min_delta", 1e-4),
+        "use_weighted_sampler": TRAINING_CONFIG.get("use_weighted_sampler", True),
+        "enable_minority_synthesis": TRAINING_CONFIG.get("enable_minority_synthesis", True),
+        "minority_ratio_threshold": TRAINING_CONFIG.get("minority_ratio_threshold", 0.65),
+        "synthesis_probability": TRAINING_CONFIG.get("synthesis_probability", 0.35),
         "phases": {
             "phase1": {
                 "name": TRAINING_PHASES["phase1"]["name"],

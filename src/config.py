@@ -108,6 +108,13 @@ TRAINING_CONFIG = {
     
     # Mixed Precision
     "use_amp": True,
+
+    # Imbalance Handling
+    "use_weighted_sampler": True,
+    "enable_minority_synthesis": True,
+    "minority_ratio_threshold": 0.65,
+    "synthesis_probability": 0.35,
+    "use_augmented_csv_if_available": True,
     
     # Early Stopping
     "patience": 5,
@@ -116,6 +123,22 @@ TRAINING_CONFIG = {
     # Cross Validation
     "n_folds": 5,
     "use_stratified": True,
+}
+
+# ============================================================
+# CGAN AUGMENTATION CONFIGURATION
+# ============================================================
+CGAN_CONFIG = {
+    "enabled": True,
+    "image_size": 64,
+    "latent_dim": 128,
+    "embedding_dim": 64,
+    "batch_size": 64,
+    "epochs": 40,
+    "learning_rate": 2e-4,
+    "ratio_threshold": 0.65,
+    "max_generate_per_class": None,
+    "save_size": 224,
 }
 
 # ============================================================
@@ -165,6 +188,11 @@ EVALUATION_CONFIG = {
         "sensitivity": 0.85,
         "specificity": 0.90,
     },
+
+    # Computation Profiling (for reproducible efficiency reporting)
+    "profile_batch_size": 1,
+    "profile_warmup_runs": 8,
+    "profile_benchmark_runs": 30,
 }
 
 # ============================================================

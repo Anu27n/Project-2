@@ -9,6 +9,7 @@
 | **Dataset** | APTOS 2019 Blindness Detection (3,662 images, 5 classes) |
 | **Model** | EfficientNet-B4 backbone + CBAM attention + dual pooling |
 | **Training** | 3-phase progressive fine-tuning with Focal Loss + Label Smoothing CE |
+| **Imbalance Strategy** | Weighted sampler + dynamic class weights + optional conditional GAN augmentation |
 | **Key Metrics** | QWK 0.878, AUC-ROC 0.964, Accuracy 84.2%, Sensitivity 85.3% |
 
 ### DR Severity Classes
@@ -70,6 +71,8 @@ Project-2/
 ├── src/
 │   ├── config.py              # All project configuration
 │   ├── dataset.py             # PyTorch Dataset + DataLoaders
+│   ├── augmentation/
+│   │   └── cgan.py            # Conditional GAN training + minority sample generation
 │   ├── preprocessing.py       # 6-step image preprocessing pipeline
 │   ├── models/
 │   │   └── efficientnet_model.py  # EfficientNet-B4 + CBAM + Ensemble
@@ -81,6 +84,7 @@ Project-2/
 │   └── visualization/
 │       └── gradcam.py         # Grad-CAM, Grad-CAM++, EigenCAM
 ├── run_train.py               # Training entry point
+├── run_cgan_augment.py        # cGAN-based minority image synthesis
 ├── run_evaluate.py            # Evaluation entry point
 ├── run_inference.py           # Single image / batch inference
 └── requirements.txt
@@ -107,6 +111,19 @@ python scripts/download_dataset.py
 
 ### 3. Train the Model
 
+Optional (recommended for class imbalance): generate minority-class synthetic images with cGAN before training.
+
+```bash
+python run_cgan_augment.py
+```
+
+This creates:
+- `data/aptos2019/train_augmented.csv`
+- `data/aptos2019/cgan_augmentation_summary.json`
+- synthetic images in `data/aptos2019/train_images/` with `synthetic_*` names
+
+Then run training normally. `run_train.py` automatically uses `train_augmented.csv` when available.
+
 ```bash
 python run_train.py
 ```
@@ -122,6 +139,12 @@ This runs the full 3-phase progressive fine-tuning pipeline:
 python run_evaluate.py
 python run_evaluate.py --checkpoint results/models/model_best_qwk.pth --save-figures
 ```
+
+`run_evaluate.py` also reports compute-aware novelty metrics in `results/metrics/final_evaluation_results.json`:
+- parameter count and model size
+- MACs / FLOPs (approximate)
+- local latency and throughput
+- accuracy-per-GFLOP, QWK-per-GFLOP, and computation efficiency score
 
 ### 5. Run Inference
 
