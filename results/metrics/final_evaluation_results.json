@@ -4,178 +4,211 @@
   "dataset": "APTOS 2019 Blindness Detection",
   "evaluation_set": "Validation Set (733 images, 20% stratified split)",
   "training_completed": true,
-  "total_epochs": 30,
-  "best_checkpoint_epoch": 29,
+  "total_epochs": 24,
+  "best_checkpoint_epoch": 24,
   "overall_metrics": {
-    "accuracy": 0.7175989085948158,
-    "quadratic_weighted_kappa": 0.7644349223352973,
-    "auc_roc_macro": 0.8692469017402932,
-    "auc_roc_weighted": 0.9090474048957341,
-    "f1_score_macro": 0.524758868911821,
-    "f1_score_weighted": 0.7127003460110122,
-    "f1_score_micro": 0.7175989085948158,
-    "precision_macro": 0.5400023171690598,
-    "precision_weighted": 0.7161697110395319,
-    "recall_macro": 0.5294572187821637,
-    "recall_weighted": 0.7175989085948158,
-    "mean_sensitivity": 0.529457218776941,
-    "mean_specificity": 0.925731383403613,
-    "top2_accuracy": 0.8567530695770805,
-    "avg_precision_macro": 0.4966643876903912,
+    "accuracy": 0.6466575716234653,
+    "quadratic_weighted_kappa": 0.7477284153606808,
+    "auc_roc_macro": 0.8671994691888008,
+    "auc_roc_weighted": 0.9045461332034309,
+    "f1_score_macro": 0.4858988434444324,
+    "f1_score_weighted": 0.6558313401242172,
+    "f1_score_micro": 0.6466575716234653,
+    "precision_macro": 0.5073235430066815,
+    "precision_weighted": 0.7195324236866807,
+    "recall_macro": 0.5293610538816417,
+    "recall_weighted": 0.6466575716234653,
+    "mean_sensitivity": 0.5293610538756366,
+    "mean_specificity": 0.9139564795368624,
+    "top2_accuracy": 0.8431105047748977,
+    "avg_precision_macro": 0.5117317720510425,
+    "accuracy_per_gflop": 0.21488017669442216,
+    "qwk_per_gflop": 0.24846537187953818,
+    "computation_efficiency_score": 7.619071457726826,
     "n_samples": 733,
-    "n_correct": 526,
-    "n_incorrect": 207
+    "n_correct": 474,
+    "n_incorrect": 259
+  },
+  "computation_metrics": {
+    "profile_input_shape": [
+      1,
+      3,
+      224,
+      224
+    ],
+    "device": {
+      "device_type": "cpu",
+      "device_name": "CPU",
+      "platform": "Windows-11-10.0.26200-SP0",
+      "python": "3.12.10"
+    },
+    "parameters_total": 19919791,
+    "parameters_trainable": 19919791,
+    "parameters_frozen": 0,
+    "model_size_mb": 76.4721794128418,
+    "macs": 1504693410,
+    "gmacs": 1.50469341,
+    "flops": 3009386820,
+    "gflops": 3.00938682,
+    "latency_ms_mean": 91.45184333416789,
+    "latency_ms_std": 35.69369287036623,
+    "throughput_images_per_sec": 10.934716715834462,
+    "accuracy_per_gflop": 0.21488017669442216,
+    "qwk_per_gflop": 0.24846537187953818,
+    "computation_efficiency_score": 7.619071457726826,
+    "efficiency_formula": "100 * (0.5 * accuracy + 0.5 * qwk) / (gflops * log(1 + params_m))",
+    "notes": "Theoretical (FLOPs/params) and practical (latency/throughput) metrics are both reported."
   },
   "per_class_metrics": {
     "No DR": {
       "class_index": 0,
       "support": 361,
-      "sensitivity": 0.9224376731276387,
-      "specificity": 0.9247311827932131,
-      "f1_score": 0.9224376731301939,
-      "precision": 0.9224376731301939,
-      "recall": 0.9224376731301939,
-      "auc_roc": 0.971375807940905,
+      "sensitivity": 0.9030470914102409,
+      "specificity": 0.9220430107502096,
+      "f1_score": 0.9106145251396648,
+      "precision": 0.9183098591549296,
+      "recall": 0.9030470914127424,
+      "auc_roc": 0.9682036160009531,
       "average_precision": 0.0,
-      "true_positives": 333,
-      "false_positives": 28,
-      "false_negatives": 28,
-      "true_negatives": 344
+      "true_positives": 326,
+      "false_positives": 29,
+      "false_negatives": 35,
+      "true_negatives": 343
     },
     "Mild": {
       "class_index": 1,
       "support": 74,
-      "sensitivity": 0.4594594594532505,
-      "specificity": 0.9044006069789008,
-      "f1_score": 0.39766081871345027,
-      "precision": 0.35051546391752575,
-      "recall": 0.4594594594594595,
-      "auc_roc": 0.7967436328589591,
+      "sensitivity": 0.5810810810732286,
+      "specificity": 0.8406676782991795,
+      "f1_score": 0.38738738738738737,
+      "precision": 0.2905405405405405,
+      "recall": 0.581081081081081,
+      "auc_roc": 0.7947545420990034,
       "average_precision": 0.0,
-      "true_positives": 34,
-      "false_positives": 63,
-      "false_negatives": 40,
-      "true_negatives": 596
+      "true_positives": 43,
+      "false_positives": 105,
+      "false_negatives": 31,
+      "true_negatives": 554
     },
     "Moderate": {
       "class_index": 2,
       "support": 200,
-      "sensitivity": 0.6599999999967,
-      "specificity": 0.8592870544073935,
-      "f1_score": 0.6486486486486487,
-      "precision": 0.6376811594202898,
-      "recall": 0.66,
-      "auc_roc": 0.8664634146341463,
+      "sensitivity": 0.3199999999984,
+      "specificity": 0.9512195121933373,
+      "f1_score": 0.4413793103448276,
+      "precision": 0.7111111111111111,
+      "recall": 0.32,
+      "auc_roc": 0.85359287054409,
       "average_precision": 0.0,
-      "true_positives": 132,
-      "false_positives": 75,
-      "false_negatives": 68,
-      "true_negatives": 458
+      "true_positives": 64,
+      "false_positives": 26,
+      "false_negatives": 136,
+      "true_negatives": 507
     },
     "Severe": {
       "class_index": 3,
       "support": 39,
       "sensitivity": 0.43589743588625907,
-      "specificity": 0.9639769452435678,
-      "f1_score": 0.41975308641975306,
-      "precision": 0.40476190476190477,
+      "specificity": 0.9077809798257813,
+      "f1_score": 0.2833333333333333,
+      "precision": 0.20987654320987653,
       "recall": 0.4358974358974359,
-      "auc_roc": 0.878703908963275,
+      "auc_roc": 0.8733466341535505,
       "average_precision": 0.0,
       "true_positives": 17,
-      "false_positives": 25,
+      "false_positives": 64,
       "false_negatives": 22,
-      "true_negatives": 669
+      "true_negatives": 630
     },
     "Proliferative": {
       "class_index": 4,
       "support": 59,
-      "sensitivity": 0.16949152542085608,
-      "specificity": 0.9762611275949907,
-      "f1_score": 0.23529411764705882,
-      "precision": 0.38461538461538464,
-      "recall": 0.1694915254237288,
-      "auc_roc": 0.8329477443041795,
+      "sensitivity": 0.4067796610100546,
+      "specificity": 0.9480712166158041,
+      "f1_score": 0.4067796610169492,
+      "precision": 0.4067796610169492,
+      "recall": 0.4067796610169492,
+      "auc_roc": 0.8460996831464065,
       "average_precision": 0.0,
-      "true_positives": 10,
-      "false_positives": 16,
-      "false_negatives": 49,
-      "true_negatives": 658
+      "true_positives": 24,
+      "false_positives": 35,
+      "false_negatives": 35,
+      "true_negatives": 639
     }
   },
   "confusion_matrix": {
     "raw": [
       [
-        333,
-        18,
-        10,
-        0,
-        0
-      ],
-      [
-        13,
-        34,
-        24,
+        326,
+        28,
+        4,
         1,
         2
       ],
       [
-        11,
-        34,
-        132,
-        15,
-        8
+        13,
+        43,
+        10,
+        4,
+        4
       ],
       [
-        2,
+        12,
+        58,
+        64,
+        47,
+        19
+      ],
+      [
         3,
-        11,
+        4,
+        5,
         17,
-        6
+        10
       ],
       [
-        2,
-        8,
-        30,
-        9,
-        10
+        1,
+        15,
+        7,
+        12,
+        24
       ]
     ],
     "normalized_by_true": [
       [
-        0.9224376731301939,
-        0.04986149584487535,
-        0.027700831024930747,
-        0.0,
-        0.0
+        0.9030470914127424,
+        0.07756232686980609,
+        0.0110803324099723,
+        0.002770083102493075,
+        0.00554016620498615
       ],
       [
         0.17567567567567569,
-        0.4594594594594595,
-        0.32432432432432434,
-        0.013513513513513514,
-        0.02702702702702703
+        0.581081081081081,
+        0.13513513513513514,
+        0.05405405405405406,
+        0.05405405405405406
       ],
       [
-        0.055,
-        0.17,
-        0.66,
-        0.075,
-        0.04
+        0.06,
+        0.29,
+        0.32,
+        0.235,
+        0.095
       ],
       [
-        0.05128205128205128,
         0.07692307692307693,
-        0.28205128205128205,
+        0.10256410256410256,
+        0.1282051282051282,
         0.4358974358974359,
-        0.15384615384615385
+        0.2564102564102564
       ],
       [
-        0.03389830508474576,
-        0.13559322033898305,
-        0.5084745762711864,
-        0.15254237288135594,
-        0.1694915254237288
+        0.01694915254237288,
+        0.2542372881355932,
+        0.11864406779661017,
+        0.2033898305084746,
+        0.4067796610169492
       ]
     ],
     "class_labels": [
@@ -187,64 +220,66 @@
     ]
   },
   "qwk_analysis": {
-    "qwk_score": 0.7644349223352973,
+    "qwk_score": 0.7477284153606808,
     "interpretation": "Substantial",
     "clinical_target": 0.85,
     "target_achieved": false,
-    "w_observed": 0.04402455661664392,
-    "w_expected": 0.18823178959554357,
-    "adjacent_grade_errors_pct": 62.8,
-    "cross_grade_errors_pct": 37.2,
+    "w_observed": 0.05369713506139154,
+    "w_expected": 0.2147139062962391,
+    "adjacent_grade_errors_pct": 70.7,
+    "cross_grade_errors_pct": 29.3,
     "top_errors": [
       {
         "true_class": "Proliferative",
-        "pred_class": "Moderate",
-        "count": 30,
-        "penalty": 0.25,
-        "total_cost": 7.5,
-        "clinical_impact": "Penalty 0.25"
-      },
-      {
-        "true_class": "Proliferative",
         "pred_class": "Mild",
-        "count": 8,
+        "count": 15,
         "penalty": 0.56,
-        "total_cost": 4.48,
+        "total_cost": 8.4,
         "clinical_impact": "Penalty 0.56"
       },
       {
         "true_class": "Moderate",
-        "pred_class": "No DR",
-        "count": 11,
+        "pred_class": "Proliferative",
+        "count": 19,
         "penalty": 0.25,
-        "total_cost": 2.75,
-        "clinical_impact": "Penalty 0.25"
-      },
-      {
-        "true_class": "No DR",
-        "pred_class": "Moderate",
-        "count": 10,
-        "penalty": 0.25,
-        "total_cost": 2.5,
+        "total_cost": 4.75,
         "clinical_impact": "Penalty 0.25"
       },
       {
         "true_class": "Moderate",
         "pred_class": "Mild",
-        "count": 34,
+        "count": 58,
         "penalty": 0.06,
-        "total_cost": 2.04,
+        "total_cost": 3.48,
+        "clinical_impact": "Penalty 0.06"
+      },
+      {
+        "true_class": "Moderate",
+        "pred_class": "No DR",
+        "count": 12,
+        "penalty": 0.25,
+        "total_cost": 3.0,
+        "clinical_impact": "Penalty 0.25"
+      },
+      {
+        "true_class": "Moderate",
+        "pred_class": "Severe",
+        "count": 47,
+        "penalty": 0.06,
+        "total_cost": 2.82,
         "clinical_impact": "Penalty 0.06"
       }
     ]
   },
   "model_comparison": {
     "EfficientNet-B4 (Ours)": {
-      "val_accuracy": 0.7175989085948158,
-      "val_qwk": 0.7644349223352973,
-      "val_auc_roc": 0.8692469017402932,
-      "params_M": 19.66,
-      "inference_ms": 38
+      "val_accuracy": 0.6466575716234653,
+      "val_qwk": 0.7477284153606808,
+      "val_auc_roc": 0.8671994691888008,
+      "params_M": 19.92,
+      "gflops": 3.009,
+      "inference_ms": 91.45,
+      "throughput_img_s": 10.93
     }
   },
   "ablation_study": {
@@ -281,33 +316,38 @@
   "targets_summary": {
     "accuracy": {
       "target": 0.9,
-      "achieved": 0.7175989085948158,
-      "status": "In Progress \u2014 79.7% of target"
+      "achieved": 0.6466575716234653,
+      "status": "In Progress \u2014 71.9% of target"
     },
     "qwk": {
       "target": 0.85,
-      "achieved": 0.7644349223352973,
-      "status": "In Progress \u2014 89.9% of target"
+      "achieved": 0.7477284153606808,
+      "status": "In Progress \u2014 88.0% of target"
     },
     "auc_roc": {
       "target": 0.95,
-      "achieved": 0.8692469017402932,
+      "achieved": 0.8671994691888008,
       "status": "In Progress"
     },
     "sensitivity": {
       "target": 0.85,
-      "achieved": 0.529457218776941,
+      "achieved": 0.5293610538756366,
       "status": "In Progress"
     },
     "specificity": {
       "target": 0.9,
-      "achieved": 0.925731383403613,
+      "achieved": 0.9139564795368624,
       "status": "ACHIEVED"
     },
     "f1_weighted": {
       "target": 0.88,
-      "achieved": 0.7127003460110122,
-      "status": "In Progress \u2014 81.0% of target"
+      "achieved": 0.6558313401242172,
+      "status": "In Progress \u2014 74.5% of target"
+    },
+    "compute_efficiency": {
+      "target": "Higher is better",
+      "achieved": 7.619071457726826,
+      "status": "Included for novelty: performance normalized by compute budget"
     },
     "overall_verdict": "Evaluation from run_evaluate.py \u2014 matches notebook 2 training."
   }
