@@ -95,7 +95,7 @@ TRAINING_CONFIG = {
     "optimizer": "AdamW",
     "learning_rate": 1e-3,
     "weight_decay": 1e-4,
-    "min_lr": 1e-6,
+    "min_lr": 1e-5,
     
     # Scheduler
     "scheduler": "CosineAnnealingWarmRestarts",
@@ -105,6 +105,13 @@ TRAINING_CONFIG = {
     # Loss
     "loss_function": "FocalLoss",
     "focal_gamma": 2.0,
+    "qwk_loss_weight": 0.30,
+
+    # MixUp / CutMix
+    "mix_probability": 0.50,
+    "cutmix_probability": 0.50,
+    "mixup_alpha": 0.4,
+    "cutmix_alpha": 1.0,
     
     # Mixed Precision
     "use_amp": True,
@@ -114,6 +121,9 @@ TRAINING_CONFIG = {
     "enable_minority_synthesis": True,
     "minority_ratio_threshold": 0.65,
     "synthesis_probability": 0.35,
+    "max_samples_per_class": 1200,
+    "transform_use_clahe": True,
+    "preprocess_apply_clahe": False,
     "use_augmented_csv_if_available": True,
     
     # Early Stopping
@@ -150,20 +160,29 @@ TRAINING_PHASES = {
         "epochs": 10,
         "freeze_backbone": True,
         "lr": 1e-3,
+        "img_size": 224,
+        "scheduler_T0": 10,
+        "scheduler_Tmult": 1,
     },
     "phase2": {
         "name": "Partial Fine-tuning",
         "epochs": 15,
         "freeze_backbone": False,
-        "unfreeze_layers": 0.5,  # Top 50% of layers
+        "unfreeze_fraction": 0.5,  # Top 50% of layers
         "lr": 1e-4,
+        "img_size": 256,
+        "scheduler_T0": 10,
+        "scheduler_Tmult": 2,
     },
     "phase3": {
         "name": "Full Fine-tuning",
         "epochs": 5,
         "freeze_backbone": False,
-        "unfreeze_layers": 1.0,  # All layers
+        "unfreeze_fraction": 1.0,  # All layers
         "lr": 1e-5,
+        "img_size": 320,
+        "scheduler_T0": 5,
+        "scheduler_Tmult": 1,
     },
 }
 

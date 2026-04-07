@@ -11,6 +11,7 @@ Usage:
 import argparse
 import sys
 from pathlib import Path
+from typing import List, Optional
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
@@ -38,7 +39,7 @@ def preprocess_image(image_path: str, img_size: int = 512):
     from preprocessing import DRPreprocessor
 
     preprocessor = DRPreprocessor(img_size=img_size)
-    img = preprocessor.preprocess(image_path, normalize=False)
+    img = preprocessor.preprocess(image_path, apply_clahe=False, normalize=False)
     img = img.astype(np.uint8)
 
     import albumentations as A
@@ -46,6 +47,7 @@ def preprocess_image(image_path: str, img_size: int = 512):
 
     transform = A.Compose([
         A.Resize(img_size, img_size),
+        A.CLAHE(clip_limit=2.0, tile_grid_size=(8, 8), p=1.0),
         A.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
         ToTensorV2(),
     ])
@@ -53,11 +55,39 @@ def preprocess_image(image_path: str, img_size: int = 512):
     return tensor, img
 
 
-def predict_single(model, image_tensor, device):
+def _build_tta_views(image_tensor: torch.Tensor, tta_rotations: List[int]) -> List[torch.Tensor]:
+    views = [image_tensor, torch.flip(image_tensor, dims=[3])]
+    for angle in tta_rotations:
+        k = (angle // 90) % 4
+        if k == 0:
+            continue
+        rotated = torch.rot90(image_tensor, k=k, dims=(2, 3))
+        views.append(rotated)
+        views.append(torch.flip(rotated, dims=[3]))
+    return views
+
+
+def predict_single(
+    model,
+    image_tensor,
+    device,
+    use_tta: bool = False,
+    tta_rotations: Optional[List[int]] = None,
+):
     image_tensor = image_tensor.to(device)
+    tta_rotations = tta_rotations or [90, 180, 270]
+
     with torch.no_grad():
-        logits = model(image_tensor)
-        probs = torch.softmax(logits, dim=1)
+        if use_tta:
+            view_probs = []
+            for view in _build_tta_views(image_tensor, tta_rotations):
+                logits = model(view)
+                view_probs.append(torch.softmax(logits, dim=1))
+            probs = torch.stack(view_probs, dim=0).mean(dim=0)
+        else:
+            logits = model(image_tensor)
+            probs = torch.softmax(logits, dim=1)
+
         pred = probs.argmax(dim=1).item()
         confidence = probs[0, pred].item()
     return pred, confidence, probs[0].cpu().numpy()
@@ -75,6 +105,13 @@ def main():
     parser.add_argument("--output", type=str, default=None, help="Output CSV path")
     parser.add_argument("--gradcam", action="store_true", help="Generate Grad-CAM overlay")
     parser.add_argument("--img-size", type=int, default=512)
+    parser.add_argument("--tta", action="store_true", help="Enable test-time augmentation")
+    parser.add_argument(
+        "--tta-rotations",
+        type=str,
+        default="90,180,270",
+        help="Comma-separated rotation angles for TTA (must be multiples of 90)",
+    )
     args = parser.parse_args()
 
     if not args.image and not args.image_dir:
@@ -84,6 +121,15 @@ def main():
     device = get_device()
     model = load_model(args.checkpoint, device)
     print(f"  Model loaded on {device}")
+
+    tta_rotations = []
+    if args.tta:
+        parsed = [r.strip() for r in args.tta_rotations.split(",") if r.strip()]
+        tta_rotations = [int(r) for r in parsed]
+        for angle in tta_rotations:
+            if angle % 90 != 0:
+                raise ValueError("All TTA rotation angles must be multiples of 90")
+        print(f"  TTA enabled with rotations: {tta_rotations}")
 
     results = []
 
@@ -99,7 +145,13 @@ def main():
 
     for img_path in image_paths:
         tensor, original = preprocess_image(str(img_path), args.img_size)
-        pred, conf, probs = predict_single(model, tensor, device)
+        pred, conf, probs = predict_single(
+            model,
+            tensor,
+            device,
+            use_tta=args.tta,
+            tta_rotations=tta_rotations,
+        )
 
         results.append({
             "image": img_path.name,

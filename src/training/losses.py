@@ -14,9 +14,10 @@ highly imbalanced APTOS 2019 dataset:
 Loss Functions Implemented:
     1. FocalLoss          - Down-weights easy examples, focuses on hard ones
     2. WeightedFocalLoss  - Focal Loss + class frequency weighting
-    3. LabelSmoothingLoss - Prevents overconfident predictions
-    4. OrdinalLoss        - Exploits ordinal nature of DR grading
-    5. CombinedLoss       - Weighted combination of multiple losses
+    3. DifferentiableQWK  - Directly optimizes agreement-oriented behavior
+    4. LabelSmoothingLoss - Prevents overconfident predictions
+    5. OrdinalLoss        - Exploits ordinal nature of DR grading
+    6. CombinedLoss       - Weighted combination of multiple losses
 """
 
 from typing import Dict, List, Optional, Tuple
@@ -158,21 +159,93 @@ class WeightedFocalLoss(nn.Module):
         self.register_buffer("class_weights", weights)
 
     def forward(self, logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+        """
+        Supports both hard labels (N,) and soft labels (N, C).
+        Soft labels are required for MixUp/CutMix.
+        """
         log_probs = F.log_softmax(logits, dim=1)
         probs = torch.exp(log_probs)
+        class_weights = self.class_weights.to(logits.device)
 
-        log_pt = log_probs.gather(1, targets.view(-1, 1)).squeeze(1)
-        pt = probs.gather(1, targets.view(-1, 1)).squeeze(1)
+        if targets.ndim == 1:
+            targets = targets.long()
+            log_pt = log_probs.gather(1, targets.view(-1, 1)).squeeze(1)
+            pt = probs.gather(1, targets.view(-1, 1)).squeeze(1)
+            alpha_t = class_weights[targets]
+        else:
+            if targets.shape != logits.shape:
+                raise ValueError(
+                    "Soft targets must have shape (N, C) matching logits. "
+                    f"Got {targets.shape} vs {logits.shape}."
+                )
+            soft_targets = targets.float()
+            soft_targets = soft_targets / soft_targets.sum(dim=1, keepdim=True).clamp_min(1e-8)
+
+            log_pt = (soft_targets * log_probs).sum(dim=1)
+            pt = (soft_targets * probs).sum(dim=1)
+            alpha_t = (soft_targets * class_weights.unsqueeze(0)).sum(dim=1)
 
         focal_weight = (1.0 - pt) ** self.gamma
-        alpha_t = self.class_weights.to(logits.device)[targets]
-
         loss = -alpha_t * focal_weight * log_pt
 
         if self.reduction == "mean":
             return loss.mean()
         elif self.reduction == "sum":
             return loss.sum()
+        return loss
+
+
+class DifferentiableQWKLoss(nn.Module):
+    """Differentiable surrogate of Quadratic Weighted Kappa loss."""
+
+    def __init__(
+        self,
+        num_classes: int = 5,
+        eps: float = 1e-8,
+        reduction: str = "mean",
+    ):
+        super(DifferentiableQWKLoss, self).__init__()
+        self.num_classes = num_classes
+        self.eps = eps
+        self.reduction = reduction
+
+    def forward(self, logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+        probs = F.softmax(logits, dim=1)
+
+        if targets.ndim == 1:
+            target_dist = F.one_hot(targets.long(), num_classes=self.num_classes).float()
+        else:
+            if targets.shape[1] != self.num_classes:
+                raise ValueError(
+                    f"targets second dimension must be {self.num_classes}, got {targets.shape[1]}"
+                )
+            target_dist = targets.float()
+            target_dist = target_dist / target_dist.sum(dim=1, keepdim=True).clamp_min(self.eps)
+
+        conf_mat = target_dist.t() @ probs
+        conf_mat = conf_mat / conf_mat.sum().clamp_min(self.eps)
+
+        hist_true = target_dist.sum(dim=0)
+        hist_true = hist_true / hist_true.sum().clamp_min(self.eps)
+        hist_pred = probs.sum(dim=0)
+        hist_pred = hist_pred / hist_pred.sum().clamp_min(self.eps)
+
+        expected = torch.outer(hist_true, hist_pred)
+        expected = expected / expected.sum().clamp_min(self.eps)
+
+        idx = torch.arange(self.num_classes, device=logits.device, dtype=torch.float32)
+        denom_scale = float((self.num_classes - 1) ** 2) if self.num_classes > 1 else 1.0
+        weight_matrix = (idx[:, None] - idx[None, :]) ** 2 / denom_scale
+
+        numerator = (weight_matrix * conf_mat).sum()
+        denominator = (weight_matrix * expected).sum().clamp_min(self.eps)
+
+        loss = numerator / denominator
+
+        if self.reduction == "sum":
+            return loss
+        if self.reduction == "none":
+            return loss.unsqueeze(0)
         return loss
 
 
@@ -476,7 +549,7 @@ def get_loss_function(
 
     Args:
         loss_name     : One of 'focal', 'weighted_focal', 'ce_smooth',
-                        'ordinal', 'combined'
+                'qwk', 'ordinal', 'combined'
         class_weights : Per-class weights (used in focal losses)
         gamma         : Focal gamma parameter
         smoothing     : Label smoothing epsilon
@@ -501,6 +574,9 @@ def get_loss_function(
         "ce_smooth": lambda: LabelSmoothingCrossEntropyLoss(
             num_classes=num_classes,
             smoothing=smoothing,
+        ),
+        "qwk": lambda: DifferentiableQWKLoss(
+            num_classes=num_classes,
         ),
         "ordinal": lambda: OrdinalRegressionLoss(
             num_classes=num_classes,

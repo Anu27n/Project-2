@@ -18,6 +18,8 @@ import numpy as np
 import pandas as pd
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
+from torch.nn.utils import spectral_norm
 from torch.utils.data import DataLoader, Dataset
 
 
@@ -32,11 +34,23 @@ class CGANConfig:
     latent_dim: int = 128
     embedding_dim: int = 64
     batch_size: int = 64
-    epochs: int = 40
+    epochs: int = 5
     learning_rate: float = 2e-4
     beta1: float = 0.5
     beta2: float = 0.999
     label_smoothing_real: float = 0.9
+    label_smoothing_fake_max: float = 0.05
+    discriminator_lr_factor: float = 0.5
+    generator_steps: int = 1
+    discriminator_dropout: float = 0.25
+    input_noise_std: float = 0.05
+    input_noise_decay: float = 0.97
+    feature_matching_weight: float = 0.0
+    early_stop_patience_g: int = 2
+    early_stop_min_delta: float = 1e-3
+    max_effective_epochs: int = 5
+    safe_max_generate_per_class: int = 500
+    max_synthetic_ratio: float = 0.5
     device: str = "cuda"
     checkpoint_interval: int = 10
 
@@ -140,31 +154,46 @@ class ConditionalGenerator(nn.Module):
 class ConditionalDiscriminator(nn.Module):
     """DCGAN-style conditional discriminator."""
 
-    def __init__(self, num_classes: int, image_size: int = 64, channels: int = 3):
+    def __init__(
+        self,
+        num_classes: int,
+        image_size: int = 64,
+        channels: int = 3,
+        dropout_p: float = 0.25,
+    ):
         super().__init__()
         self.image_size = image_size
         self.label_emb = nn.Embedding(num_classes, image_size * image_size)
+        self.dropout = nn.Dropout2d(p=dropout_p)
 
-        self.net = nn.Sequential(
-            nn.Conv2d(channels + 1, 64, 4, 2, 1, bias=False),
-            nn.LeakyReLU(0.2, inplace=True),
-            nn.Conv2d(64, 128, 4, 2, 1, bias=False),
-            nn.BatchNorm2d(128),
-            nn.LeakyReLU(0.2, inplace=True),
-            nn.Conv2d(128, 256, 4, 2, 1, bias=False),
-            nn.BatchNorm2d(256),
-            nn.LeakyReLU(0.2, inplace=True),
-            nn.Conv2d(256, 512, 4, 2, 1, bias=False),
-            nn.BatchNorm2d(512),
-            nn.LeakyReLU(0.2, inplace=True),
-            nn.Conv2d(512, 1, 4, 1, 0, bias=False),
-        )
+        self.conv1 = spectral_norm(nn.Conv2d(channels + 1, 64, 4, 2, 1, bias=False))
+        self.conv2 = spectral_norm(nn.Conv2d(64, 128, 4, 2, 1, bias=False))
+        self.bn2 = nn.BatchNorm2d(128)
+        self.conv3 = spectral_norm(nn.Conv2d(128, 256, 4, 2, 1, bias=False))
+        self.bn3 = nn.BatchNorm2d(256)
+        self.conv4 = spectral_norm(nn.Conv2d(256, 512, 4, 2, 1, bias=False))
+        self.bn4 = nn.BatchNorm2d(512)
+        self.conv_out = spectral_norm(nn.Conv2d(512, 1, 4, 1, 0, bias=False))
 
-    def forward(self, images: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self,
+        images: torch.Tensor,
+        labels: torch.Tensor,
+        return_features: bool = False,
+    ):
         label_map = self.label_emb(labels).view(labels.size(0), 1, self.image_size, self.image_size)
         x = torch.cat([images, label_map], dim=1)
-        out = self.net(x)
-        return out.view(-1)
+
+        f1 = self.dropout(F.leaky_relu(self.conv1(x), 0.2, inplace=True))
+        f2 = self.dropout(F.leaky_relu(self.bn2(self.conv2(f1)), 0.2, inplace=True))
+        f3 = self.dropout(F.leaky_relu(self.bn3(self.conv3(f2)), 0.2, inplace=True))
+        f4 = self.dropout(F.leaky_relu(self.bn4(self.conv4(f3)), 0.2, inplace=True))
+
+        logits = self.conv_out(f4).view(-1)
+
+        if return_features:
+            return logits, [f1, f2, f3, f4]
+        return logits
 
 
 class ConditionalGANTrainer:
@@ -191,6 +220,7 @@ class ConditionalGANTrainer:
             num_classes=config.num_classes,
             image_size=config.image_size,
             channels=config.channels,
+            dropout_p=config.discriminator_dropout,
         ).to(self.device)
 
         self.criterion = nn.BCEWithLogitsLoss()
@@ -202,20 +232,66 @@ class ConditionalGANTrainer:
         )
         self.opt_d = torch.optim.Adam(
             self.discriminator.parameters(),
-            lr=config.learning_rate,
+            lr=config.learning_rate * config.discriminator_lr_factor,
             betas=(config.beta1, config.beta2),
         )
 
+        self.best_generator_loss: Optional[float] = None
+        self.best_generator_epoch: Optional[int] = None
+        self.best_generator_checkpoint: Optional[Path] = None
+
+    @staticmethod
+    def _set_requires_grad(module: nn.Module, requires_grad: bool) -> None:
+        for p in module.parameters():
+            p.requires_grad = requires_grad
+
+    @staticmethod
+    def _add_input_noise(images: torch.Tensor, std: float) -> torch.Tensor:
+        if std <= 0:
+            return images
+        noisy = images + torch.randn_like(images) * std
+        return noisy.clamp(-1.0, 1.0)
+
     def train(self, loader: DataLoader, output_dir: Optional[Path] = None) -> Dict[str, List[float]]:
-        history: Dict[str, List[float]] = {"g_loss": [], "d_loss": []}
+        history: Dict[str, List[float]] = {
+            "g_loss": [],
+            "g_adv_loss": [],
+            "g_fm_loss": [],
+            "d_loss": [],
+            "noise_std": [],
+        }
         output_dir = Path(output_dir) if output_dir is not None else None
         if output_dir is not None:
             output_dir.mkdir(parents=True, exist_ok=True)
 
-        for epoch in range(1, self.config.epochs + 1):
+        max_epochs = max(
+            1,
+            min(int(self.config.epochs), int(self.config.max_effective_epochs)),
+        )
+        if int(self.config.epochs) > max_epochs:
+            print(
+                f"[cGAN] Requested {self.config.epochs} epochs, capping to {max_epochs} "
+                "for stable controlled augmentation."
+            )
+
+        best_g = float("inf")
+        best_generator_state: Optional[Dict[str, torch.Tensor]] = None
+        best_ckpt_path = (output_dir / "cgan_best_generator.pth") if output_dir is not None else None
+
+        prev_g_epoch: Optional[float] = None
+        g_increase_streak = 0
+
+        for epoch in range(1, max_epochs + 1):
             g_running = 0.0
+            g_adv_running = 0.0
+            g_fm_running = 0.0
             d_running = 0.0
             steps = 0
+            noise_std = max(
+                0.0,
+                float(self.config.input_noise_std)
+                * (float(self.config.input_noise_decay) ** max(0, epoch - 1)),
+            )
 
             for real_images, labels in loader:
                 real_images = real_images.to(self.device)
@@ -227,48 +303,129 @@ class ConditionalGANTrainer:
                     fill_value=self.config.label_smoothing_real,
                     device=self.device,
                 )
-                fake_targets = torch.zeros(batch_size, device=self.device)
+                fake_targets = torch.rand(batch_size, device=self.device) * self.config.label_smoothing_fake_max
 
-                # Train discriminator
+                # Train discriminator (1 step)
+                self.discriminator.train()
+                self._set_requires_grad(self.discriminator, True)
                 self.opt_d.zero_grad(set_to_none=True)
 
-                logits_real = self.discriminator(real_images, labels)
+                real_noisy = self._add_input_noise(real_images, noise_std)
+                logits_real = self.discriminator(real_noisy, labels)
                 loss_real = self.criterion(logits_real, real_targets)
 
                 z = torch.randn(batch_size, self.config.latent_dim, device=self.device)
                 fake_images = self.generator(z, labels)
-                logits_fake = self.discriminator(fake_images.detach(), labels)
+                fake_noisy = self._add_input_noise(fake_images.detach(), noise_std)
+                logits_fake = self.discriminator(fake_noisy, labels)
                 loss_fake = self.criterion(logits_fake, fake_targets)
 
                 d_loss = 0.5 * (loss_real + loss_fake)
                 d_loss.backward()
                 self.opt_d.step()
 
-                # Train generator
-                self.opt_g.zero_grad(set_to_none=True)
-                z = torch.randn(batch_size, self.config.latent_dim, device=self.device)
-                gen_images = self.generator(z, labels)
-                gen_logits = self.discriminator(gen_images, labels)
-                g_loss = self.criterion(gen_logits, torch.ones(batch_size, device=self.device))
-                g_loss.backward()
-                self.opt_g.step()
+                # Train generator (multiple steps)
+                self.discriminator.eval()
+                self._set_requires_grad(self.discriminator, False)
 
-                g_running += float(g_loss.item())
+                g_batch_total = 0.0
+                g_batch_adv = 0.0
+                g_batch_fm = 0.0
+
+                for _ in range(max(1, int(self.config.generator_steps))):
+                    self.opt_g.zero_grad(set_to_none=True)
+
+                    z = torch.randn(batch_size, self.config.latent_dim, device=self.device)
+                    gen_images = self.generator(z, labels)
+                    gen_noisy = self._add_input_noise(gen_images, noise_std)
+
+                    use_feature_matching = float(self.config.feature_matching_weight) > 0.0
+                    if use_feature_matching:
+                        gen_logits, fake_feats = self.discriminator(gen_noisy, labels, return_features=True)
+                    else:
+                        gen_logits = self.discriminator(gen_noisy, labels)
+                        fake_feats = []
+
+                    g_adv = self.criterion(
+                        gen_logits,
+                        torch.full((batch_size,), self.config.label_smoothing_real, device=self.device),
+                    )
+
+                    fm_loss = torch.tensor(0.0, device=self.device)
+                    if use_feature_matching:
+                        with torch.no_grad():
+                            _, real_feats = self.discriminator(real_noisy, labels, return_features=True)
+                        for rf, ff in zip(real_feats, fake_feats):
+                            fm_loss = fm_loss + torch.mean(torch.abs(ff.mean(dim=0) - rf.mean(dim=0)))
+
+                    g_loss = g_adv + float(self.config.feature_matching_weight) * fm_loss
+                    g_loss.backward()
+                    self.opt_g.step()
+
+                    g_batch_total += float(g_loss.item())
+                    g_batch_adv += float(g_adv.item())
+                    g_batch_fm += float(fm_loss.item())
+
+                g_loss = g_batch_total / max(1, int(self.config.generator_steps))
+                g_adv_loss = g_batch_adv / max(1, int(self.config.generator_steps))
+                g_fm_loss = g_batch_fm / max(1, int(self.config.generator_steps))
+
+                g_running += g_loss
+                g_adv_running += g_adv_loss
+                g_fm_running += g_fm_loss
                 d_running += float(d_loss.item())
                 steps += 1
 
             g_epoch = g_running / max(steps, 1)
+            g_adv_epoch = g_adv_running / max(steps, 1)
+            g_fm_epoch = g_fm_running / max(steps, 1)
             d_epoch = d_running / max(steps, 1)
+
             history["g_loss"].append(g_epoch)
+            history["g_adv_loss"].append(g_adv_epoch)
+            history["g_fm_loss"].append(g_fm_epoch)
             history["d_loss"].append(d_epoch)
+            history["noise_std"].append(noise_std)
 
             print(
-                f"[cGAN] Epoch {epoch:03d}/{self.config.epochs} | "
-                f"D Loss: {d_epoch:.4f} | G Loss: {g_epoch:.4f}"
+                f"[cGAN] Epoch {epoch:03d}/{max_epochs} | "
+                f"D Loss: {d_epoch:.4f} | "
+                f"G Loss: {g_epoch:.4f} (adv={g_adv_epoch:.4f}, fm={g_fm_epoch:.4f}) | "
+                f"noise={noise_std:.4f}"
             )
 
+            if g_epoch < best_g:
+                best_g = g_epoch
+
+                best_generator_state = {
+                    k: v.detach().cpu().clone() for k, v in self.generator.state_dict().items()
+                }
+                self.best_generator_loss = float(g_epoch)
+                self.best_generator_epoch = int(epoch)
+
+                if best_ckpt_path is not None:
+                    best_payload = {
+                        "epoch": int(epoch),
+                        "g_loss": float(g_epoch),
+                        "generator": best_generator_state,
+                        "config": self.config.__dict__,
+                    }
+                    torch.save(best_payload, best_ckpt_path)
+                    self.best_generator_checkpoint = best_ckpt_path
+
+            if prev_g_epoch is not None and g_epoch > (prev_g_epoch + self.config.early_stop_min_delta):
+                g_increase_streak += 1
+            else:
+                g_increase_streak = 0
+
+            prev_g_epoch = g_epoch
+
+            should_early_stop = g_increase_streak >= int(self.config.early_stop_patience_g)
+
             if output_dir is not None and (
-                epoch % self.config.checkpoint_interval == 0 or epoch == self.config.epochs
+                epoch % self.config.checkpoint_interval == 0
+                or epoch == max_epochs
+                or should_early_stop
             ):
                 ckpt = {
                     "epoch": epoch,
@@ -278,6 +435,21 @@ class ConditionalGANTrainer:
                     "history": history,
                 }
                 torch.save(ckpt, output_dir / f"cgan_epoch_{epoch:03d}.pth")
+
+            if should_early_stop:
+                print(
+                    f"[cGAN] Early stopping at epoch {epoch:03d}: "
+                    f"generator loss increased for {g_increase_streak} consecutive epochs."
+                )
+                break
+
+        if best_generator_state is not None:
+            self.generator.load_state_dict(best_generator_state)
+            self.generator.to(self.device)
+            print(
+                f"[cGAN] Restored best generator from epoch {self.best_generator_epoch} "
+                f"(g_loss={self.best_generator_loss:.4f}) for image synthesis."
+            )
 
         return history
 
@@ -328,28 +500,54 @@ def compute_generation_plan(
     df: pd.DataFrame,
     ratio_threshold: float = 0.65,
     max_generate_per_class: Optional[int] = None,
+    max_synthetic_ratio: float = 0.5,
+    safe_max_per_class: int = 500,
 ) -> Dict[int, int]:
     """
     Compute per-class synthetic image counts to reduce imbalance.
 
     Any class with count < ratio_threshold * majority_count is considered minority.
-    Target count for minority classes is majority_count.
+    Generation is safety-capped to keep augmentation controlled:
+    - max per class (default <= 500)
+    - max total synthetic ratio (default <= 50% of real data)
     """
     labels = df["diagnosis"].astype(int).to_numpy()
     counts = np.bincount(labels, minlength=5)
     majority = int(counts.max()) if len(counts) > 0 else 0
 
-    plan: Dict[int, int] = {}
+    requested: Dict[int, int] = {}
+    per_class_cap = max(0, int(safe_max_per_class))
+    if max_generate_per_class is not None:
+        per_class_cap = min(per_class_cap, max(0, int(max_generate_per_class)))
+
     for cls_id, count in enumerate(counts):
         if count <= 0:
             continue
 
         if count < majority * ratio_threshold:
             needed = max(0, majority - int(count))
-            if max_generate_per_class is not None:
-                needed = min(needed, int(max_generate_per_class))
+            needed = min(needed, per_class_cap)
             if needed > 0:
-                plan[int(cls_id)] = int(needed)
+                requested[int(cls_id)] = int(needed)
+
+    if not requested:
+        return {}
+
+    max_total_synth = max(0, int(len(df) * float(max_synthetic_ratio)))
+    if max_total_synth <= 0:
+        return {}
+
+    # Allocate generation budget to the smallest classes first.
+    ordered = sorted(requested.items(), key=lambda kv: (counts[kv[0]], -kv[1]))
+    plan: Dict[int, int] = {}
+    remaining = max_total_synth
+    for cls_id, needed in ordered:
+        if remaining <= 0:
+            break
+        take = min(int(needed), int(remaining))
+        if take > 0:
+            plan[int(cls_id)] = int(take)
+            remaining -= int(take)
 
     return plan
 
@@ -383,6 +581,8 @@ def run_cgan_augmentation(
         df,
         ratio_threshold=ratio_threshold,
         max_generate_per_class=max_generate_per_class,
+        max_synthetic_ratio=config.max_synthetic_ratio,
+        safe_max_per_class=config.safe_max_generate_per_class,
     )
 
     if not plan:
@@ -407,7 +607,15 @@ def run_cgan_augmentation(
     )
 
     trainer = ConditionalGANTrainer(config)
-    history = trainer.train(loader, output_dir=output_dir / "checkpoints")
+    checkpoints_dir = output_dir / "checkpoints"
+    history = trainer.train(loader, output_dir=checkpoints_dir)
+
+    # Always synthesize with the best generator checkpoint (lowest epoch-level G loss).
+    best_ckpt_path = checkpoints_dir / "cgan_best_generator.pth"
+    if best_ckpt_path.exists():
+        best_ckpt = torch.load(best_ckpt_path, map_location=trainer.device)
+        if "generator" in best_ckpt:
+            trainer.generator.load_state_dict(best_ckpt["generator"])
 
     generated_records: List[Tuple[str, int]] = []
     synth_dir = image_dir
@@ -425,13 +633,30 @@ def run_cgan_augmentation(
     augmented_csv_path = output_dir / "train_augmented.csv"
     augmented_df = save_augmented_dataframe(df, generated_records, augmented_csv_path)
 
+    max_per_class = int(config.safe_max_generate_per_class)
+    if max_generate_per_class is not None:
+        max_per_class = min(max_per_class, int(max_generate_per_class))
+
+    generated_ratio = float(len(generated_records) / max(1, len(df)))
+
     result = {
         "status": "ok",
         "base_samples": int(len(df)),
         "generated_samples": int(len(generated_records)),
         "augmented_samples": int(len(augmented_df)),
+        "generated_to_real_ratio": generated_ratio,
         "generation_plan": {str(k): int(v) for k, v in plan.items()},
+        "generation_safety": {
+            "max_generate_per_class": int(max_per_class),
+            "max_synthetic_ratio": float(config.max_synthetic_ratio),
+        },
+        "best_generator": {
+            "epoch": trainer.best_generator_epoch,
+            "g_loss": trainer.best_generator_loss,
+            "checkpoint_path": str(best_ckpt_path) if best_ckpt_path.exists() else None,
+        },
         "history": {
+            "g_loss_best": trainer.best_generator_loss,
             "g_loss_final": history["g_loss"][-1] if history["g_loss"] else None,
             "d_loss_final": history["d_loss"][-1] if history["d_loss"] else None,
         },

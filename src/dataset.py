@@ -42,6 +42,7 @@ class DRDataset(Dataset):
         enable_minority_synthesis: bool = False,
         minority_classes: Optional[List[int]] = None,
         synthesis_probability: float = 0.35,
+        preprocess_apply_clahe: bool = False,
     ):
         self.df = df.reset_index(drop=True)
         self.image_dir = Path(image_dir)
@@ -51,6 +52,7 @@ class DRDataset(Dataset):
         self.enable_minority_synthesis = enable_minority_synthesis
         self.minority_classes = set(minority_classes or [])
         self.synthesis_probability = synthesis_probability
+        self.preprocess_apply_clahe = preprocess_apply_clahe
 
         if preprocessor is None:
             self.preprocessor = DRPreprocessor(img_size=img_size)
@@ -185,7 +187,11 @@ class DRDataset(Dataset):
         image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
         
         # Apply preprocessing
-        image = self.preprocessor.preprocess(image, normalize=False)
+        image = self.preprocessor.preprocess(
+            image,
+            apply_clahe=self.preprocess_apply_clahe,
+            normalize=False,
+        )
         
         return image.astype(np.uint8)
     
@@ -199,7 +205,12 @@ class DRDataset(Dataset):
         return {self.class_names[i]: counts.get(i, 0) for i in range(self.num_classes)}
 
 
-def get_train_transforms(img_size: int = 512) -> A.Compose:
+def get_train_transforms(
+    img_size: int = 512,
+    use_clahe: bool = True,
+    clahe_clip_limit: float = 2.0,
+    clahe_tile_size: int = 8,
+) -> A.Compose:
     """
     Get training augmentation pipeline.
     
@@ -209,8 +220,20 @@ def get_train_transforms(img_size: int = 512) -> A.Compose:
     Returns:
         Albumentations Compose pipeline
     """
-    return A.Compose([
+    tfms: List[A.BasicTransform] = [
         A.Resize(img_size, img_size),
+    ]
+
+    if use_clahe:
+        tfms.append(
+            A.CLAHE(
+                clip_limit=clahe_clip_limit,
+                tile_grid_size=(clahe_tile_size, clahe_tile_size),
+                p=1.0,
+            )
+        )
+
+    tfms.extend([
         A.RandomRotate90(p=0.5),
         A.HorizontalFlip(p=0.5),
         A.VerticalFlip(p=0.5),
@@ -254,8 +277,15 @@ def get_train_transforms(img_size: int = 512) -> A.Compose:
         ToTensorV2()
     ])
 
+    return A.Compose(tfms)
 
-def get_valid_transforms(img_size: int = 512) -> A.Compose:
+
+def get_valid_transforms(
+    img_size: int = 512,
+    use_clahe: bool = True,
+    clahe_clip_limit: float = 2.0,
+    clahe_tile_size: int = 8,
+) -> A.Compose:
     """
     Get validation/test transform pipeline (no augmentation).
     
@@ -265,14 +295,55 @@ def get_valid_transforms(img_size: int = 512) -> A.Compose:
     Returns:
         Albumentations Compose pipeline
     """
-    return A.Compose([
-        A.Resize(img_size, img_size),
+    tfms: List[A.BasicTransform] = [A.Resize(img_size, img_size)]
+
+    if use_clahe:
+        tfms.append(
+            A.CLAHE(
+                clip_limit=clahe_clip_limit,
+                tile_grid_size=(clahe_tile_size, clahe_tile_size),
+                p=1.0,
+            )
+        )
+
+    tfms.extend([
         A.Normalize(
             mean=[0.485, 0.456, 0.406],
             std=[0.229, 0.224, 0.225]
         ),
         ToTensorV2()
     ])
+
+    return A.Compose(tfms)
+
+
+def cap_samples_per_class(
+    df: pd.DataFrame,
+    max_samples_per_class: Optional[int] = None,
+    num_classes: int = 5,
+    random_state: int = 42,
+) -> pd.DataFrame:
+    """Cap per-class sample counts to avoid excessive duplication."""
+    if max_samples_per_class is None or max_samples_per_class <= 0:
+        return df.reset_index(drop=True)
+
+    parts: List[pd.DataFrame] = []
+    for cls_id in range(num_classes):
+        cls_df = df[df["diagnosis"].astype(int) == cls_id]
+        if len(cls_df) == 0:
+            continue
+        if len(cls_df) > max_samples_per_class:
+            cls_df = cls_df.sample(n=max_samples_per_class, random_state=random_state)
+        parts.append(cls_df)
+
+    if not parts:
+        return df.reset_index(drop=True)
+
+    return (
+        pd.concat(parts, axis=0)
+        .sample(frac=1.0, random_state=random_state)
+        .reset_index(drop=True)
+    )
 
 
 def create_data_loaders(
@@ -288,6 +359,9 @@ def create_data_loaders(
     minority_ratio_threshold: float = 0.65,
     synthesis_probability: float = 0.35,
     pin_memory: bool = True,
+    max_samples_per_class: Optional[int] = None,
+    transform_use_clahe: bool = True,
+    preprocess_apply_clahe: bool = False,
 ) -> Tuple[DataLoader, DataLoader]:
     """
     Create training and validation data loaders.
@@ -304,6 +378,12 @@ def create_data_loaders(
     Returns:
         Tuple of (train_loader, valid_loader)
     """
+    train_df = cap_samples_per_class(
+        train_df,
+        max_samples_per_class=max_samples_per_class,
+        num_classes=5,
+    )
+
     train_labels = train_df['diagnosis'].astype(int).to_numpy()
     class_counts = np.bincount(train_labels, minlength=5)
     majority_count = int(class_counts.max()) if len(class_counts) > 0 else 0
@@ -317,18 +397,20 @@ def create_data_loaders(
     train_dataset = DRDataset(
         df=train_df,
         image_dir=train_dir,
-        transform=get_train_transforms(img_size),
+        transform=get_train_transforms(img_size, use_clahe=transform_use_clahe),
         img_size=img_size,
         enable_minority_synthesis=enable_minority_synthesis,
         minority_classes=minority_classes,
         synthesis_probability=synthesis_probability,
+        preprocess_apply_clahe=preprocess_apply_clahe,
     )
     
     valid_dataset = DRDataset(
         df=valid_df,
         image_dir=valid_dir,
-        transform=get_valid_transforms(img_size),
-        img_size=img_size
+        transform=get_valid_transforms(img_size, use_clahe=transform_use_clahe),
+        img_size=img_size,
+        preprocess_apply_clahe=preprocess_apply_clahe,
     )
     
     # Create data loaders

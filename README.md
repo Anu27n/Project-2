@@ -169,6 +169,48 @@ streamlit run app/streamlit_app.py
 uvicorn app.api:app --host 0.0.0.0 --port 8000
 ```
 
+## Portable Run + ZIP Packaging
+
+### Run Locally (CPU or GPU)
+
+```bash
+# Auto-detect device (GPU if available, else CPU)
+python run_train.py --device auto
+
+# Optional: resume from last checkpoint automatically
+python run_train.py --resume auto
+
+# Optional: quick debug run
+python run_train.py --debug --epochs 6
+```
+
+### Run on Kaggle/Colab GPU
+
+```bash
+# Inside Kaggle/Colab after uploading/extracting the project
+pip install -r requirements.txt
+
+# Auto-select CUDA when available
+python run_train.py --device auto
+python run_evaluate.py
+```
+
+### Create Upload-Ready ZIP (Automatic)
+
+```bash
+python create_zip.py
+```
+
+This generates:
+- `Project-2.zip`
+
+The archive is created from the project root and excludes unnecessary files/folders such as:
+- `.git/`, `.venv/`, `__pycache__/`, `data/`, `backups/`, temp/log files
+
+It keeps core assets for training/evaluation portability:
+- `src/`, `notebooks/`, `run_train.py`, `run_evaluate.py`, `run_cgan_augment.py`, `requirements.txt`, `README.md`
+- `results/models/` checkpoint files (`.pth`, `.pt`, `.ckpt`, `.safetensors`)
+
 ## Architecture
 
 ### Model: EfficientNet-B4 + CBAM

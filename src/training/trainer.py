@@ -26,13 +26,14 @@ from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from torch.amp import GradScaler, autocast
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-from .losses import WeightedFocalLoss, LabelSmoothingCrossEntropyLoss
+from .losses import WeightedFocalLoss, DifferentiableQWKLoss
 
 try:
     from sklearn.metrics import (
@@ -301,10 +302,16 @@ class DRTrainer:
             gamma=self.config.get("focal_gamma", 2.0),
             num_classes=self.config.get("num_classes", 5),
         )
-        self.ce_loss = LabelSmoothingCrossEntropyLoss(
+        self.qwk_loss = DifferentiableQWKLoss(
             num_classes=self.config.get("num_classes", 5),
-            smoothing=0.1,
         )
+        self.qwk_loss_weight = float(np.clip(self.config.get("qwk_loss_weight", 0.30), 0.0, 1.0))
+
+        # ---- Batch mixing controls ----
+        self.mix_probability = float(np.clip(self.config.get("mix_probability", 0.50), 0.0, 1.0))
+        self.cutmix_probability = float(np.clip(self.config.get("cutmix_probability", 0.50), 0.0, 1.0))
+        self.mixup_alpha = float(self.config.get("mixup_alpha", 0.4))
+        self.cutmix_alpha = float(self.config.get("cutmix_alpha", 1.0))
 
         # ---- Training state ----
         self.current_epoch = 0
@@ -322,11 +329,15 @@ class DRTrainer:
         # ---- Optimizer / Scheduler (initialized per phase) ----
         self.optimizer: Optional[torch.optim.Optimizer] = None
         self.scheduler: Optional[Any] = None
+        self._pending_resume_state: Optional[Dict[str, Any]] = None
 
         print(f"\n{'='*60}")
         print(f"  DRTrainer initialized")
         print(f"  Device      : {self.device}")
         print(f"  AMP enabled : {self.use_amp}")
+        print(f"  Mix prob    : {self.mix_probability:.2f}")
+        print(f"  CutMix prob : {self.cutmix_probability:.2f}")
+        print(f"  QWK weight  : {self.qwk_loss_weight:.2f}")
         print(f"  Output dir  : {self.output_dir}")
         print(f"{'='*60}\n")
 
@@ -344,6 +355,12 @@ class DRTrainer:
             "gradient_clip": 1.0,
             "weight_decay": 1e-4,
             "focal_gamma": 2.0,
+            "qwk_loss_weight": 0.30,
+            "mix_probability": 0.50,
+            "cutmix_probability": 0.50,
+            "mixup_alpha": 0.4,
+            "cutmix_alpha": 1.0,
+            "min_lr": 1e-5,
             "early_stopping_patience": 7,
             "early_stopping_min_delta": 1e-4,
             "phases": {
@@ -351,6 +368,7 @@ class DRTrainer:
                     "name": "Feature Extraction",
                     "epochs": 10,
                     "lr": 1e-3,
+                    "img_size": 224,
                     "freeze_backbone": True,
                     "unfreeze_fraction": 0.0,
                     "scheduler_T0": 10,
@@ -360,6 +378,7 @@ class DRTrainer:
                     "name": "Partial Fine-tuning",
                     "epochs": 15,
                     "lr": 1e-4,
+                    "img_size": 256,
                     "freeze_backbone": False,
                     "unfreeze_fraction": 0.5,
                     "scheduler_T0": 10,
@@ -369,6 +388,7 @@ class DRTrainer:
                     "name": "Full Fine-tuning",
                     "epochs": 5,
                     "lr": 1e-5,
+                    "img_size": 320,
                     "freeze_backbone": False,
                     "unfreeze_fraction": 1.0,
                     "scheduler_T0": 5,
@@ -411,11 +431,12 @@ class DRTrainer:
         self, optimizer: AdamW, T_0: int, T_mult: int
     ) -> CosineAnnealingWarmRestarts:
         """Create Cosine Annealing with Warm Restarts scheduler."""
+        min_lr = float(self.config.get("min_lr", 1e-5))
         return CosineAnnealingWarmRestarts(
             optimizer,
             T_0=T_0,
             T_mult=T_mult,
-            eta_min=1e-7,
+            eta_min=max(min_lr, 1e-7),
         )
 
     def _configure_phase(self, phase_key: str):
@@ -435,6 +456,9 @@ class DRTrainer:
         print(f"  PHASE {phase_key[-1]}: {phase_name}")
         print(f"  LR       : {lr}")
         print(f"  Epochs   : {phase_cfg['epochs']}")
+        if "img_size" in phase_cfg:
+            print(f"  Img Size : {phase_cfg['img_size']}")
+        print(f"  Min LR   : {self.config.get('min_lr', 1e-5)}")
         print(f"{'='*60}")
 
         # Configure backbone freezing
@@ -458,9 +482,157 @@ class DRTrainer:
         self.optimizer = self._setup_optimizer(lr)
         self.scheduler = self._setup_scheduler(self.optimizer, T0, Tmult)
 
+        # If checkpoint resume happened before optimizer/scheduler existed,
+        # restore those states now on first configured phase.
+        if self._pending_resume_state is not None:
+            opt_state = self._pending_resume_state.get("optimizer_state_dict")
+            sch_state = self._pending_resume_state.get("scheduler_state_dict")
+
+            if opt_state:
+                try:
+                    self.optimizer.load_state_dict(opt_state)
+                    print("  [Resume] Optimizer state restored")
+                except Exception as exc:
+                    print(f"  [Resume] Optimizer state restore skipped: {exc}")
+
+            if sch_state:
+                try:
+                    self.scheduler.load_state_dict(sch_state)
+                    print("  [Resume] Scheduler state restored")
+                except Exception as exc:
+                    print(f"  [Resume] Scheduler state restore skipped: {exc}")
+
+            self._pending_resume_state = None
+
         total_p = sum(p.numel() for p in self.model.parameters())
         train_p = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
         print(f"  Trainable params : {train_p:,} / {total_p:,}")
+
+    def _to_one_hot(self, labels: torch.Tensor) -> torch.Tensor:
+        return F.one_hot(labels.long(), num_classes=self.config["num_classes"]).float()
+
+    @staticmethod
+    def _rand_bbox(size: Tuple[int, int, int, int], lam: float) -> Tuple[int, int, int, int]:
+        _, _, h, w = size
+        cut_ratio = np.sqrt(1.0 - lam)
+        cut_w = int(w * cut_ratio)
+        cut_h = int(h * cut_ratio)
+
+        cx = np.random.randint(w)
+        cy = np.random.randint(h)
+
+        x1 = np.clip(cx - cut_w // 2, 0, w)
+        y1 = np.clip(cy - cut_h // 2, 0, h)
+        x2 = np.clip(cx + cut_w // 2, 0, w)
+        y2 = np.clip(cy + cut_h // 2, 0, h)
+
+        return int(x1), int(y1), int(x2), int(y2)
+
+    def _apply_mixup(
+        self,
+        images: torch.Tensor,
+        labels: torch.Tensor,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        if self.mixup_alpha <= 0.0:
+            return images, self._to_one_hot(labels)
+
+        lam = float(np.random.beta(self.mixup_alpha, self.mixup_alpha))
+        index = torch.randperm(images.size(0), device=images.device)
+
+        mixed_images = lam * images + (1.0 - lam) * images[index]
+        targets_a = self._to_one_hot(labels)
+        targets_b = self._to_one_hot(labels[index])
+        mixed_targets = lam * targets_a + (1.0 - lam) * targets_b
+
+        return mixed_images, mixed_targets
+
+    def _apply_cutmix(
+        self,
+        images: torch.Tensor,
+        labels: torch.Tensor,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        if self.cutmix_alpha <= 0.0:
+            return images, self._to_one_hot(labels)
+
+        lam = float(np.random.beta(self.cutmix_alpha, self.cutmix_alpha))
+        index = torch.randperm(images.size(0), device=images.device)
+
+        x1, y1, x2, y2 = self._rand_bbox(images.size(), lam)
+        mixed_images = images.clone()
+        mixed_images[:, :, y1:y2, x1:x2] = images[index, :, y1:y2, x1:x2]
+
+        cut_area = (x2 - x1) * (y2 - y1)
+        lam_adjusted = 1.0 - (cut_area / float(images.size(-1) * images.size(-2) + 1e-8))
+
+        targets_a = self._to_one_hot(labels)
+        targets_b = self._to_one_hot(labels[index])
+        mixed_targets = lam_adjusted * targets_a + (1.0 - lam_adjusted) * targets_b
+
+        return mixed_images, mixed_targets
+
+    def _maybe_apply_batch_mixing(
+        self,
+        images: torch.Tensor,
+        labels: torch.Tensor,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        if images.size(0) < 2 or self.mix_probability <= 0.0:
+            return images, labels
+
+        if np.random.rand() > self.mix_probability:
+            return images, labels
+
+        if np.random.rand() < self.cutmix_probability:
+            return self._apply_cutmix(images, labels)
+        return self._apply_mixup(images, labels)
+
+    @staticmethod
+    def _unwrap_dataset(dataset: Any) -> Any:
+        current = dataset
+        visited = set()
+        while hasattr(current, "dataset") and id(current) not in visited:
+            visited.add(id(current))
+            current = current.dataset
+        return current
+
+    def _set_dataset_img_size(self, dataset: Any, img_size: int, is_train: bool) -> None:
+        base_dataset = self._unwrap_dataset(dataset)
+
+        if hasattr(base_dataset, "img_size"):
+            base_dataset.img_size = int(img_size)
+
+        if hasattr(base_dataset, "preprocessor") and hasattr(base_dataset.preprocessor, "img_size"):
+            base_dataset.preprocessor.img_size = int(img_size)
+
+        if not hasattr(base_dataset, "transform"):
+            return
+
+        try:
+            from dataset import get_train_transforms, get_valid_transforms
+
+            base_dataset.transform = (
+                get_train_transforms(int(img_size), use_clahe=True)
+                if is_train
+                else get_valid_transforms(int(img_size), use_clahe=True)
+            )
+        except Exception as exc:
+            print(f"  [Resize] Transform update skipped: {exc}")
+
+    def _apply_progressive_resize(
+        self,
+        phase_key: str,
+        train_loader: DataLoader,
+        valid_loader: DataLoader,
+    ) -> None:
+        phase_cfg = self.config["phases"].get(phase_key, {})
+        phase_img_size = phase_cfg.get("img_size")
+
+        if phase_img_size is None:
+            return
+
+        phase_img_size = int(phase_img_size)
+        self._set_dataset_img_size(train_loader.dataset, phase_img_size, is_train=True)
+        self._set_dataset_img_size(valid_loader.dataset, phase_img_size, is_train=False)
+        print(f"  Progressive resize applied -> {phase_img_size}x{phase_img_size}")
 
     # ----------------------------------------------------------
     # TRAINING AND VALIDATION STEPS
@@ -488,13 +660,16 @@ class DRTrainer:
             images = images.to(self.device, non_blocking=True)
             labels = labels.to(self.device, non_blocking=True)
 
+            metric_targets = labels
+            images, train_targets = self._maybe_apply_batch_mixing(images, labels)
+
             self.optimizer.zero_grad(set_to_none=True)
 
             with autocast("cuda", enabled=self.use_amp):
                 logits = self.model(images)
-                focal = self.criterion(logits, labels)
-                ce    = self.ce_loss(logits, labels)
-                loss  = 0.70 * focal + 0.30 * ce
+                focal_loss = self.criterion(logits, train_targets)
+                qwk_loss = self.qwk_loss(logits, train_targets)
+                loss = ((1.0 - self.qwk_loss_weight) * focal_loss) + (self.qwk_loss_weight * qwk_loss)
 
             self.scaler.scale(loss).backward()
 
@@ -510,16 +685,15 @@ class DRTrainer:
 
             # Gather predictions
             with torch.no_grad():
-                import torch.nn.functional as F
                 probs = F.softmax(logits, dim=1)
                 preds = probs.argmax(dim=1)
 
-            tracker.update(loss.item(), preds, labels, probs)
+            tracker.update(loss.item(), preds, metric_targets, probs)
 
             # Update progress bar
             pbar.set_postfix({
                 "loss": f"{loss.item():.4f}",
-                "acc":  f"{(preds == labels).float().mean().item():.3f}",
+                "acc":  f"{(preds == metric_targets).float().mean().item():.3f}",
             })
 
         # Step scheduler once per epoch
@@ -545,8 +719,6 @@ class DRTrainer:
         self.model.eval()
         tracker = MetricsTracker(num_classes=self.config["num_classes"])
 
-        import torch.nn.functional as F
-
         pbar = tqdm(loader, desc=f"  Valid Ep {epoch:03d}", leave=False, ncols=100)
 
         for images, labels in pbar:
@@ -555,9 +727,9 @@ class DRTrainer:
 
             with autocast("cuda", enabled=self.use_amp):
                 logits = self.model(images)
-                focal = self.criterion(logits, labels)
-                ce    = self.ce_loss(logits, labels)
-                loss  = 0.70 * focal + 0.30 * ce
+                focal_loss = self.criterion(logits, labels)
+                qwk_loss = self.qwk_loss(logits, labels)
+                loss = ((1.0 - self.qwk_loss_weight) * focal_loss) + (self.qwk_loss_weight * qwk_loss)
 
             probs = F.softmax(logits, dim=1)
             preds = probs.argmax(dim=1)
@@ -621,12 +793,25 @@ class DRTrainer:
         checkpoint = torch.load(path, map_location=self.device)
         self.model.load_state_dict(checkpoint["model_state_dict"], strict=strict)
 
-        if self.optimizer and checkpoint.get("optimizer_state_dict"):
-            self.optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
-        if self.scheduler and checkpoint.get("scheduler_state_dict"):
-            self.scheduler.load_state_dict(checkpoint["scheduler_state_dict"])
+        opt_state = checkpoint.get("optimizer_state_dict")
+        sch_state = checkpoint.get("scheduler_state_dict")
 
-        self.scaler.load_state_dict(checkpoint["scaler_state_dict"])
+        if self.optimizer and opt_state:
+            self.optimizer.load_state_dict(opt_state)
+        if self.scheduler and sch_state:
+            self.scheduler.load_state_dict(sch_state)
+
+        # Defer optimizer/scheduler restore if they are not initialized yet.
+        if (self.optimizer is None and opt_state) or (self.scheduler is None and sch_state):
+            self._pending_resume_state = {
+                "optimizer_state_dict": opt_state,
+                "scheduler_state_dict": sch_state,
+            }
+
+        if checkpoint.get("scaler_state_dict"):
+            self.scaler.load_state_dict(checkpoint["scaler_state_dict"])
+
+        self.current_epoch = int(checkpoint.get("epoch", 0))
         self.best_qwk     = checkpoint.get("best_qwk", 0.0)
         self.best_val_acc = checkpoint.get("best_val_acc", 0.0)
         self.best_val_loss= checkpoint.get("best_val_loss", float("inf"))
@@ -661,6 +846,7 @@ class DRTrainer:
 
         # Configure model and optimizers for this phase
         self._configure_phase(phase_key)
+        self._apply_progressive_resize(phase_key, train_loader, valid_loader)
 
         # Reset early stopping per phase
         early_stopper = EarlyStopping(
