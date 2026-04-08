@@ -1,0 +1,28 @@
+{
+  "status": "ok",
+  "base_samples": 2929,
+  "generated_samples": 1464,
+  "augmented_samples": 4393,
+  "generated_to_real_ratio": 0.499829293274155,
+  "generation_plan": {
+    "3": 500,
+    "4": 500,
+    "1": 464
+  },
+  "generation_safety": {
+    "max_generate_per_class": 500,
+    "max_synthetic_ratio": 0.5
+  },
+  "best_generator": {
+    "epoch": 4,
+    "g_loss": 0.33107662331211113,
+    "checkpoint_path": "D:\\Project-2\\data\\aptos2019\\cgan_train_only\\checkpoints\\cgan_best_generator.pth"
+  },
+  "history": {
+    "g_loss_best": 0.33107662331211113,
+    "g_loss_final": 0.33107662331211113,
+    "d_loss_final": 0.23623355929968787
+  },
+  "augmented_csv_path": "D:\\Project-2\\data\\aptos2019\\cgan_train_only\\train_augmented.csv",
+  "elapsed_sec": 313.30296444892883
+}

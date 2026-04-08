@@ -127,7 +127,7 @@ TRAINING_CONFIG = {
     "use_augmented_csv_if_available": True,
     
     # Early Stopping
-    "patience": 5,
+    "patience": 6,
     "min_delta": 0.001,
     
     # Cross Validation
@@ -157,31 +157,31 @@ CGAN_CONFIG = {
 TRAINING_PHASES = {
     "phase1": {
         "name": "Feature Extraction",
-        "epochs": 10,
+        "epochs": 6,
         "freeze_backbone": True,
-        "lr": 1e-3,
-        "img_size": 224,
-        "scheduler_T0": 10,
+        "lr": 5e-4,
+        "img_size": 256,
+        "scheduler_T0": 3,
         "scheduler_Tmult": 1,
     },
     "phase2": {
         "name": "Partial Fine-tuning",
-        "epochs": 15,
+        "epochs": 10,
         "freeze_backbone": False,
-        "unfreeze_fraction": 0.5,  # Top 50% of layers
-        "lr": 1e-4,
-        "img_size": 256,
-        "scheduler_T0": 10,
+        "unfreeze_fraction": 0.5,
+        "lr": 2e-4,
+        "img_size": 320,
+        "scheduler_T0": 3,
         "scheduler_Tmult": 2,
     },
     "phase3": {
         "name": "Full Fine-tuning",
-        "epochs": 5,
+        "epochs": 4,
         "freeze_backbone": False,
-        "unfreeze_fraction": 1.0,  # All layers
-        "lr": 1e-5,
-        "img_size": 320,
-        "scheduler_T0": 5,
+        "unfreeze_fraction": 1.0,
+        "lr": 5e-6,
+        "img_size": 380,
+        "scheduler_T0": 2,
         "scheduler_Tmult": 1,
     },
 }

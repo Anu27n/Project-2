@@ -55,8 +55,8 @@ def _env_float(name: str, default: float) -> float:
 CONFIG: Dict[str, object] = {
     "data_dir": os.getenv("DATA_DIR", os.path.join(BASE_DIR, "data", "aptos2019")),
     "save_dir": os.getenv("SAVE_DIR", os.path.join(BASE_DIR, "results", "models")),
-    "batch_size": _env_int("BATCH_SIZE", 16),
-    "epochs": _env_int("EPOCHS", 30),
+    "batch_size": _env_int("BATCH_SIZE", 6),
+    "epochs": _env_int("EPOCHS", 20),
     "device": os.getenv("DEVICE", "auto"),
     "num_workers": _env_int("NUM_WORKERS", 0),
     "cpu_threads": _env_int("CPU_THREADS", 4),
