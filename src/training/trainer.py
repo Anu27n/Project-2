@@ -763,6 +763,7 @@ class DRTrainer:
         """
         checkpoint = {
             "epoch": epoch,
+            "model_name": getattr(self.model, "model_name", None),
             "model_state_dict": self.model.state_dict(),
             "optimizer_state_dict": self.optimizer.state_dict() if self.optimizer else None,
             "scheduler_state_dict": self.scheduler.state_dict() if self.scheduler else None,

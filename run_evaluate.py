@@ -79,11 +79,17 @@ def main():
         print("Run training first: python run_train.py")
         return 1
 
-    from config import PREPROCESSING_CONFIG, EVALUATION_CONFIG, get_device, set_seed
+    from config import (
+        EVALUATION_CONFIG,
+        MODEL_CONFIG,
+        PREPROCESSING_CONFIG,
+        get_device,
+        set_seed,
+    )
     from dataset import DRDataset, get_valid_transforms
     from evaluation.computation import compute_efficiency_scores, profile_model_computation
     from evaluation.metrics import DRMetricsEvaluator
-    from models.efficientnet_model import EfficientNetDR
+    from models.efficientnet_model import load_efficientnet_dr_from_checkpoint
 
     set_seed(42)
     device = get_device()
@@ -113,13 +119,17 @@ def main():
         pin_memory=True,
     )
 
-    model = EfficientNetDR(num_classes=5, pretrained=False, dropout=0.4, use_attention=True)
-    ckpt = torch.load(checkpoint_path, map_location=device, weights_only=False)
-    model.load_state_dict(ckpt["model_state_dict"])
-    model = model.to(device)
-    model.eval()
+    model, ckpt = load_efficientnet_dr_from_checkpoint(
+        checkpoint_path,
+        map_location=device,
+        num_classes=5,
+        dropout=float(MODEL_CONFIG.get("dropout", 0.4)),
+        use_attention=True,
+        weights_only=False,
+    )
 
     print(f"  Loaded checkpoint from epoch {ckpt.get('epoch', '?')}")
+    print(f"  Backbone (resolved): {model.model_name}")
     print(f"  Device: {device}")
 
     profile_batch_size = max(1, args.profile_batch_size)

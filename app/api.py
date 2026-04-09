@@ -20,8 +20,8 @@ from fastapi.responses import JSONResponse
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
-from config import get_device
-from models.efficientnet_model import EfficientNetDR
+from config import MODEL_CONFIG, get_device
+from models.efficientnet_model import EfficientNetDR, load_efficientnet_dr_from_checkpoint
 from preprocessing import DRPreprocessor
 
 app = FastAPI(
@@ -56,15 +56,25 @@ def get_model():
     global _model, _device, _preprocessor
     if _model is None:
         _device = get_device()
-        _model = EfficientNetDR(
-            num_classes=5, pretrained=False, dropout=0.4, use_attention=True
-        )
         checkpoint_path = PROJECT_ROOT / "results" / "models" / "model_best_qwk.pth"
         if checkpoint_path.exists():
-            ckpt = torch.load(checkpoint_path, map_location=_device, weights_only=False)
-            _model.load_state_dict(ckpt["model_state_dict"])
-        _model = _model.to(_device)
-        _model.eval()
+            _model, _ = load_efficientnet_dr_from_checkpoint(
+                checkpoint_path,
+                map_location=_device,
+                num_classes=5,
+                dropout=float(MODEL_CONFIG.get("dropout", 0.4)),
+                use_attention=True,
+                weights_only=False,
+            )
+        else:
+            _model = EfficientNetDR(
+                num_classes=5,
+                pretrained=False,
+                dropout=float(MODEL_CONFIG.get("dropout", 0.4)),
+                use_attention=True,
+                model_name=str(MODEL_CONFIG.get("architecture", "efficientnet_b4")),
+            ).to(_device)
+            _model.eval()
         _preprocessor = DRPreprocessor(img_size=512)
     return _model, _device, _preprocessor
 

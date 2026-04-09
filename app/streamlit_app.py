@@ -30,17 +30,31 @@ RECOMMENDATIONS = [
 
 @st.cache_resource
 def load_model():
-    from config import get_device
-    from models.efficientnet_model import EfficientNetDR
+    from config import MODEL_CONFIG, get_device
+    from models.efficientnet_model import load_efficientnet_dr_from_checkpoint
 
     device = get_device()
-    model = EfficientNetDR(num_classes=5, pretrained=False, dropout=0.4, use_attention=True)
     ckpt_path = PROJECT_ROOT / "results" / "models" / "model_best_qwk.pth"
     if ckpt_path.exists():
-        ckpt = torch.load(ckpt_path, map_location=device, weights_only=False)
-        model.load_state_dict(ckpt["model_state_dict"])
-    model = model.to(device)
-    model.eval()
+        model, _ = load_efficientnet_dr_from_checkpoint(
+            ckpt_path,
+            map_location=device,
+            num_classes=5,
+            dropout=float(MODEL_CONFIG.get("dropout", 0.4)),
+            use_attention=True,
+            weights_only=False,
+        )
+    else:
+        from models.efficientnet_model import EfficientNetDR
+
+        model = EfficientNetDR(
+            num_classes=5,
+            pretrained=False,
+            dropout=float(MODEL_CONFIG.get("dropout", 0.4)),
+            use_attention=True,
+            model_name=str(MODEL_CONFIG.get("architecture", "efficientnet_b4")),
+        ).to(device)
+        model.eval()
     return model, device
 
 

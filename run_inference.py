@@ -25,13 +25,17 @@ CLASS_NAMES = ["No DR", "Mild", "Moderate", "Severe", "Proliferative"]
 
 
 def load_model(checkpoint_path: str, device: torch.device):
-    from models.efficientnet_model import EfficientNetDR
+    from config import MODEL_CONFIG
+    from models.efficientnet_model import load_efficientnet_dr_from_checkpoint
 
-    model = EfficientNetDR(num_classes=5, pretrained=False, dropout=0.4, use_attention=True)
-    ckpt = torch.load(checkpoint_path, map_location=device, weights_only=False)
-    model.load_state_dict(ckpt["model_state_dict"])
-    model = model.to(device)
-    model.eval()
+    model, _ = load_efficientnet_dr_from_checkpoint(
+        checkpoint_path,
+        map_location=device,
+        num_classes=5,
+        dropout=float(MODEL_CONFIG.get("dropout", 0.4)),
+        use_attention=True,
+        weights_only=False,
+    )
     return model
 
 

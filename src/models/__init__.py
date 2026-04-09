@@ -7,8 +7,10 @@ from .efficientnet_model import (
     EfficientNetDR,
     EnsembleDRModel,
     build_model,
+    infer_timm_efficientnet_name,
     list_supported_architectures,
     load_checkpoint,
+    load_efficientnet_dr_from_checkpoint,
 )
 
 __all__ = [
@@ -16,6 +18,8 @@ __all__ = [
     "EnsembleDRModel",
     "build_model",
     "load_checkpoint",
+    "load_efficientnet_dr_from_checkpoint",
+    "infer_timm_efficientnet_name",
     "list_supported_architectures",
     "SUPPORTED_ARCHITECTURES",
 ]

@@ -12,7 +12,8 @@ Classes:
     - 4: Proliferative DR
 """
 
-from typing import Dict, List, Optional, Tuple
+from pathlib import Path
+from typing import Dict, List, Optional, Tuple, Union
 
 import numpy as np
 import timm
@@ -399,6 +400,70 @@ class EnsembleDRModel(nn.Module):
 # ============================================================
 # MODEL FACTORY
 # ============================================================
+
+
+def infer_timm_efficientnet_name(state_dict: Dict[str, torch.Tensor]) -> str:
+    """
+    Guess timm efficientnet_* name from weights (conv stem + head + backbone size).
+
+    B0 and B1 share the same stem/head tensor shapes in timm; we use backbone param count.
+    """
+    prefix = "backbone."
+    stem = state_dict.get(prefix + "conv_stem.weight")
+    head = state_dict.get(prefix + "conv_head.weight")
+    if stem is None or head is None:
+        return "efficientnet_b4"
+    stem_c = int(stem.shape[0])
+    out_c = int(head.shape[0])
+    in_c = int(head.shape[1])
+    backbone_n = sum(
+        int(v.numel())
+        for k, v in state_dict.items()
+        if k.startswith(prefix) and isinstance(v, torch.Tensor)
+    )
+    if stem_c == 32 and out_c == 1280 and in_c == 320:
+        return "efficientnet_b0" if backbone_n < 5_300_000 else "efficientnet_b1"
+    if stem_c == 32 and out_c == 1408 and in_c == 352:
+        return "efficientnet_b2"
+    if stem_c == 40 and out_c == 1536 and in_c == 384:
+        return "efficientnet_b3"
+    if stem_c == 48 and out_c == 1792 and in_c == 448:
+        return "efficientnet_b4"
+    if stem_c == 48 and out_c == 2048 and in_c == 512:
+        return "efficientnet_b5"
+    return "efficientnet_b4"
+
+
+def load_efficientnet_dr_from_checkpoint(
+    checkpoint_path: Union[str, Path],
+    *,
+    map_location=None,
+    num_classes: int = 5,
+    dropout: float = 0.4,
+    use_attention: bool = True,
+    weights_only: bool = False,
+) -> Tuple[EfficientNetDR, Dict]:
+    """
+    Build EfficientNetDR to match a saved checkpoint (architecture inferred if needed).
+    """
+    path = Path(checkpoint_path)
+    ckpt = torch.load(path, map_location=map_location, weights_only=weights_only)
+    sd = ckpt.get("model_state_dict")
+    if not isinstance(sd, dict):
+        raise ValueError(f"No model_state_dict in checkpoint: {path}")
+    model_name = ckpt.get("model_name") or infer_timm_efficientnet_name(sd)
+    model = EfficientNetDR(
+        num_classes=num_classes,
+        pretrained=False,
+        dropout=dropout,
+        use_attention=use_attention,
+        model_name=str(model_name),
+    )
+    if map_location is not None:
+        model = model.to(map_location)
+    model.load_state_dict(sd, strict=True)
+    model.eval()
+    return model, ckpt
 
 
 def build_model(
