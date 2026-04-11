@@ -206,15 +206,18 @@ class MetricsTracker:
             if self.all_probs:
                 probs_arr = np.array(self.all_probs)
                 try:
+                    all_labels = list(range(self.num_classes))
                     metrics["auc_roc"] = float(
                         roc_auc_score(
                             targets,
                             probs_arr,
                             multi_class="ovr",
                             average="macro",
+                            labels=all_labels,
                         )
                     )
-                except Exception:
+                except Exception as e:
+                    print(f"  [AUC] Could not compute: {e}")
                     metrics["auc_roc"] = 0.0
 
             # ---- Per-class accuracy ----
