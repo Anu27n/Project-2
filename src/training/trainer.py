@@ -791,7 +791,7 @@ class DRTrainer:
         Returns:
             Checkpoint metadata dictionary
         """
-        checkpoint = torch.load(path, map_location=self.device)
+        checkpoint = torch.load(path, map_location=self.device, weights_only=False)
         self.model.load_state_dict(checkpoint["model_state_dict"], strict=strict)
 
         opt_state = checkpoint.get("optimizer_state_dict")
@@ -965,7 +965,7 @@ class DRTrainer:
                 if best_ckpt.exists():
                     print(f"\n  Restoring best weights from {best_ckpt}")
                     self.model.load_state_dict(
-                        torch.load(best_ckpt, map_location=self.device)["model_state_dict"]
+                        torch.load(best_ckpt, map_location=self.device, weights_only=False)["model_state_dict"]
                     )
 
         total_time = time.time() - total_start

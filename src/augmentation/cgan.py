@@ -613,7 +613,7 @@ def run_cgan_augmentation(
     # Always synthesize with the best generator checkpoint (lowest epoch-level G loss).
     best_ckpt_path = checkpoints_dir / "cgan_best_generator.pth"
     if best_ckpt_path.exists():
-        best_ckpt = torch.load(best_ckpt_path, map_location=trainer.device)
+        best_ckpt = torch.load(best_ckpt_path, map_location=trainer.device, weights_only=False)
         if "generator" in best_ckpt:
             trainer.generator.load_state_dict(best_ckpt["generator"])
 

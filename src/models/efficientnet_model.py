@@ -392,7 +392,7 @@ class EnsembleDRModel(nn.Module):
     def load_model_weights(self, model_paths: List[str], device: torch.device):
         """Load saved weights for each model in the ensemble."""
         for model, path in zip(self.models, model_paths):
-            checkpoint = torch.load(path, map_location=device)
+            checkpoint = torch.load(path, map_location=device, weights_only=False)
             model.load_state_dict(checkpoint["model_state_dict"])
             print(f"[OK] Loaded weights from {path}")
 
@@ -526,7 +526,7 @@ def load_checkpoint(
     Returns:
         Tuple of (model with loaded weights, checkpoint metadata)
     """
-    checkpoint = torch.load(checkpoint_path, map_location=device)
+    checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
     model.load_state_dict(checkpoint["model_state_dict"], strict=strict)
 
     metadata = {
