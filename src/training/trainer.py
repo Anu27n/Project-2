@@ -686,9 +686,9 @@ class DRTrainer:
             self.scaler.step(self.optimizer)
             self.scaler.update()
 
-            # Gather predictions
+            # Gather predictions (cast to float32 so softmax sums to 1.0 under AMP)
             with torch.no_grad():
-                probs = F.softmax(logits, dim=1)
+                probs = F.softmax(logits.float(), dim=1)
                 preds = probs.argmax(dim=1)
 
             tracker.update(loss.item(), preds, metric_targets, probs)
@@ -734,7 +734,7 @@ class DRTrainer:
                 qwk_loss = self.qwk_loss(logits, labels)
                 loss = ((1.0 - self.qwk_loss_weight) * focal_loss) + (self.qwk_loss_weight * qwk_loss)
 
-            probs = F.softmax(logits, dim=1)
+            probs = F.softmax(logits.float(), dim=1)
             preds = probs.argmax(dim=1)
 
             tracker.update(loss.item(), preds, labels, probs)
