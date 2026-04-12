@@ -310,6 +310,9 @@ class DRTrainer:
         )
         self.qwk_loss_weight = float(np.clip(self.config.get("qwk_loss_weight", 0.30), 0.0, 1.0))
 
+        # ---- Label smoothing ----
+        self.label_smoothing = float(self.config.get("label_smoothing", 0.0))
+
         # ---- Batch mixing controls ----
         self.mix_probability = float(np.clip(self.config.get("mix_probability", 0.50), 0.0, 1.0))
         self.cutmix_probability = float(np.clip(self.config.get("cutmix_probability", 0.50), 0.0, 1.0))
@@ -665,6 +668,12 @@ class DRTrainer:
 
             metric_targets = labels
             images, train_targets = self._maybe_apply_batch_mixing(images, labels)
+
+            if train_targets.ndim == 1 and self.label_smoothing > 0:
+                nc = self.config["num_classes"]
+                smooth = self.label_smoothing
+                one_hot = F.one_hot(train_targets.long(), nc).float()
+                train_targets = one_hot * (1.0 - smooth) + smooth / nc
 
             self.optimizer.zero_grad(set_to_none=True)
 
