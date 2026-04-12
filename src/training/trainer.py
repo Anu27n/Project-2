@@ -721,6 +721,7 @@ class DRTrainer:
         """
         self.model.eval()
         tracker = MetricsTracker(num_classes=self.config["num_classes"])
+        use_tta = self.config.get("use_tta", True)
 
         pbar = tqdm(loader, desc=f"  Valid Ep {epoch:03d}", leave=False, ncols=100)
 
@@ -735,6 +736,15 @@ class DRTrainer:
                 loss = ((1.0 - self.qwk_loss_weight) * focal_loss) + (self.qwk_loss_weight * qwk_loss)
 
             probs = F.softmax(logits.float(), dim=1)
+
+            if use_tta:
+                with torch.no_grad(), autocast("cuda", enabled=self.use_amp):
+                    logits_hflip = self.model(torch.flip(images, dims=[3]))
+                    logits_vflip = self.model(torch.flip(images, dims=[2]))
+                probs = (probs
+                         + F.softmax(logits_hflip.float(), dim=1)
+                         + F.softmax(logits_vflip.float(), dim=1)) / 3.0
+
             preds = probs.argmax(dim=1)
 
             tracker.update(loss.item(), preds, labels, probs)

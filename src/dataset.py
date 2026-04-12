@@ -240,35 +240,40 @@ def get_train_transforms(
         A.ShiftScaleRotate(
             shift_limit=0.1,
             scale_limit=0.15,
-            rotate_limit=30,
+            rotate_limit=45,
             border_mode=cv2.BORDER_CONSTANT,
             value=0,
             p=0.5
         ),
         A.OneOf([
-            A.GaussNoise(var_limit=(10.0, 50.0), p=1),
+            A.ElasticTransform(alpha=80, sigma=50, p=1),
+            A.GridDistortion(num_steps=5, distort_limit=0.2, p=1),
+        ], p=0.25),
+        A.OneOf([
+            A.GaussNoise(var_limit=(5.0, 25.0), p=1),
             A.GaussianBlur(blur_limit=(3, 5), p=1),
+            A.Sharpen(alpha=(0.1, 0.3), lightness=(0.9, 1.1), p=1),
         ], p=0.3),
         A.OneOf([
             A.RandomBrightnessContrast(
-                brightness_limit=0.2,
-                contrast_limit=0.2,
+                brightness_limit=0.15,
+                contrast_limit=0.15,
                 p=1
             ),
             A.HueSaturationValue(
-                hue_shift_limit=10,
-                sat_shift_limit=20,
-                val_shift_limit=10,
+                hue_shift_limit=8,
+                sat_shift_limit=15,
+                val_shift_limit=8,
                 p=1
             ),
         ], p=0.3),
         A.CoarseDropout(
             max_holes=8,
-            max_height=img_size // 20,
-            max_width=img_size // 20,
-            min_holes=2,
+            max_height=img_size // 16,
+            max_width=img_size // 16,
+            min_holes=3,
             fill_value=0,
-            p=0.2
+            p=0.25
         ),
         A.Normalize(
             mean=[0.485, 0.456, 0.406],
