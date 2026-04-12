@@ -310,6 +310,12 @@ class DRTrainer:
         )
         self.qwk_loss_weight = float(np.clip(self.config.get("qwk_loss_weight", 0.30), 0.0, 1.0))
 
+        # ---- Regression mode ----
+        self.regression_mode = bool(self.config.get("regression_mode", False))
+        if self.regression_mode:
+            self.mse_criterion = nn.SmoothL1Loss()
+            print("  [Trainer] Regression mode ON — using SmoothL1 loss")
+
         # ---- Label smoothing ----
         self.label_smoothing = float(self.config.get("label_smoothing", 0.0))
 
@@ -667,40 +673,58 @@ class DRTrainer:
             labels = labels.to(self.device, non_blocking=True)
 
             metric_targets = labels
-            images, train_targets = self._maybe_apply_batch_mixing(images, labels)
 
-            if train_targets.ndim == 1 and self.label_smoothing > 0:
-                nc = self.config["num_classes"]
-                smooth = self.label_smoothing
-                one_hot = F.one_hot(train_targets.long(), nc).float()
-                train_targets = one_hot * (1.0 - smooth) + smooth / nc
+            if self.regression_mode:
+                self.optimizer.zero_grad(set_to_none=True)
+                with autocast("cuda", enabled=self.use_amp):
+                    output = self.model(images).squeeze(1)
+                    loss = self.mse_criterion(output, labels.float())
 
-            self.optimizer.zero_grad(set_to_none=True)
+                self.scaler.scale(loss).backward()
+                if self.config.get("gradient_clip"):
+                    self.scaler.unscale_(self.optimizer)
+                    nn.utils.clip_grad_norm_(
+                        self.model.parameters(), self.config["gradient_clip"]
+                    )
+                self.scaler.step(self.optimizer)
+                self.scaler.update()
 
-            with autocast("cuda", enabled=self.use_amp):
-                logits = self.model(images)
-                focal_loss = self.criterion(logits, train_targets)
-                qwk_loss = self.qwk_loss(logits, train_targets)
-                loss = ((1.0 - self.qwk_loss_weight) * focal_loss) + (self.qwk_loss_weight * qwk_loss)
+                with torch.no_grad():
+                    preds = output.float().round().clamp(0, 4).long()
+                tracker.update(loss.item(), preds, metric_targets, None)
+            else:
+                images, train_targets = self._maybe_apply_batch_mixing(images, labels)
 
-            self.scaler.scale(loss).backward()
+                if train_targets.ndim == 1 and self.label_smoothing > 0:
+                    nc = self.config["num_classes"]
+                    smooth = self.label_smoothing
+                    one_hot = F.one_hot(train_targets.long(), nc).float()
+                    train_targets = one_hot * (1.0 - smooth) + smooth / nc
 
-            # Gradient clipping
-            if self.config.get("gradient_clip"):
-                self.scaler.unscale_(self.optimizer)
-                nn.utils.clip_grad_norm_(
-                    self.model.parameters(), self.config["gradient_clip"]
-                )
+                self.optimizer.zero_grad(set_to_none=True)
 
-            self.scaler.step(self.optimizer)
-            self.scaler.update()
+                with autocast("cuda", enabled=self.use_amp):
+                    logits = self.model(images)
+                    focal_loss = self.criterion(logits, train_targets)
+                    qwk_loss = self.qwk_loss(logits, train_targets)
+                    loss = ((1.0 - self.qwk_loss_weight) * focal_loss) + (self.qwk_loss_weight * qwk_loss)
 
-            # Gather predictions (cast to float32 so softmax sums to 1.0 under AMP)
-            with torch.no_grad():
-                probs = F.softmax(logits.float(), dim=1)
-                preds = probs.argmax(dim=1)
+                self.scaler.scale(loss).backward()
 
-            tracker.update(loss.item(), preds, metric_targets, probs)
+                if self.config.get("gradient_clip"):
+                    self.scaler.unscale_(self.optimizer)
+                    nn.utils.clip_grad_norm_(
+                        self.model.parameters(), self.config["gradient_clip"]
+                    )
+
+                self.scaler.step(self.optimizer)
+                self.scaler.update()
+
+                with torch.no_grad():
+                    probs = F.softmax(logits.float(), dim=1)
+                    preds = probs.argmax(dim=1)
+
+                tracker.update(loss.item(), preds, metric_targets, probs)
 
             # Update progress bar
             pbar.set_postfix({
@@ -738,25 +762,38 @@ class DRTrainer:
             images = images.to(self.device, non_blocking=True)
             labels = labels.to(self.device, non_blocking=True)
 
-            with autocast("cuda", enabled=self.use_amp):
-                logits = self.model(images)
-                focal_loss = self.criterion(logits, labels)
-                qwk_loss = self.qwk_loss(logits, labels)
-                loss = ((1.0 - self.qwk_loss_weight) * focal_loss) + (self.qwk_loss_weight * qwk_loss)
+            if self.regression_mode:
+                with autocast("cuda", enabled=self.use_amp):
+                    output = self.model(images).squeeze(1)
+                    loss = self.mse_criterion(output, labels.float())
 
-            probs = F.softmax(logits.float(), dim=1)
+                if use_tta:
+                    with autocast("cuda", enabled=self.use_amp):
+                        out_hf = self.model(torch.flip(images, dims=[3])).squeeze(1)
+                        out_vf = self.model(torch.flip(images, dims=[2])).squeeze(1)
+                    output = (output + out_hf + out_vf) / 3.0
 
-            if use_tta:
-                with torch.no_grad(), autocast("cuda", enabled=self.use_amp):
-                    logits_hflip = self.model(torch.flip(images, dims=[3]))
-                    logits_vflip = self.model(torch.flip(images, dims=[2]))
-                probs = (probs
-                         + F.softmax(logits_hflip.float(), dim=1)
-                         + F.softmax(logits_vflip.float(), dim=1)) / 3.0
+                preds = output.float().round().clamp(0, 4).long()
+                tracker.update(loss.item(), preds, labels, None)
+            else:
+                with autocast("cuda", enabled=self.use_amp):
+                    logits = self.model(images)
+                    focal_loss = self.criterion(logits, labels)
+                    qwk_loss = self.qwk_loss(logits, labels)
+                    loss = ((1.0 - self.qwk_loss_weight) * focal_loss) + (self.qwk_loss_weight * qwk_loss)
 
-            preds = probs.argmax(dim=1)
+                probs = F.softmax(logits.float(), dim=1)
 
-            tracker.update(loss.item(), preds, labels, probs)
+                if use_tta:
+                    with autocast("cuda", enabled=self.use_amp):
+                        logits_hflip = self.model(torch.flip(images, dims=[3]))
+                        logits_vflip = self.model(torch.flip(images, dims=[2]))
+                    probs = (probs
+                             + F.softmax(logits_hflip.float(), dim=1)
+                             + F.softmax(logits_vflip.float(), dim=1)) / 3.0
+
+                preds = probs.argmax(dim=1)
+                tracker.update(loss.item(), preds, labels, probs)
 
             pbar.set_postfix({
                 "loss": f"{loss.item():.4f}",
