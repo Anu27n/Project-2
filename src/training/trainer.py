@@ -698,12 +698,8 @@ class DRTrainer:
                 if train_targets.ndim == 1 and self.label_smoothing > 0:
                     nc = self.config["num_classes"]
                     smooth = self.label_smoothing
-                    idx = train_targets.long()
-                    grid = torch.arange(nc, device=idx.device).unsqueeze(0)
-                    dist = (grid - idx.unsqueeze(1)).abs().float()
-                    weights = torch.exp(-dist)
-                    weights = weights / weights.sum(dim=1, keepdim=True)
-                    train_targets = weights * (1.0 - smooth) + smooth / nc
+                    one_hot = F.one_hot(train_targets.long(), nc).float()
+                    train_targets = one_hot * (1.0 - smooth) + smooth / nc
 
                 self.optimizer.zero_grad(set_to_none=True)
 
