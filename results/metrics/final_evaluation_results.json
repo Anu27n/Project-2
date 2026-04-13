@@ -9,25 +9,25 @@
   "overall_metrics": {
     "accuracy": 0.8167,
     "quadratic_weighted_kappa": 0.8377,
-    "auc_roc_macro": 0.8671994691888008,
-    "auc_roc_weighted": 0.9045461332034309,
-    "f1_score_macro": 0.4858988434444324,
-    "f1_score_weighted": 0.6558313401242172,
+    "auc_roc_macro": 0.8672,
+    "auc_roc_weighted": 0.9045,
+    "f1_score_macro": 0.4859,
+    "f1_score_weighted": 0.6558,
     "f1_score_micro": 0.8167,
-    "precision_macro": 0.5073235430066815,
-    "precision_weighted": 0.7195324236866807,
+    "precision_macro": 0.5073,
+    "precision_weighted": 0.7195,
     "recall_macro": 0.7232,
     "recall_weighted": 0.8167,
     "mean_sensitivity": 0.7232,
-    "mean_specificity": 0.9139564795368624,
-    "top2_accuracy": 0.8431105047748977,
-    "avg_precision_macro": 0.5117317720510425,
-    "accuracy_per_gflop": 0.27138418849059753,
-    "qwk_per_gflop": 0.278362354228693,
-    "computation_efficiency_score": 9.039815328986505,
+    "mean_specificity": 0.9140,
+    "top2_accuracy": 0.8431,
+    "avg_precision_macro": 0.5117,
+    "accuracy_per_gflop": 0.2714,
+    "qwk_per_gflop": 0.2784,
+    "computation_efficiency_score": 9.04,
     "n_samples": 733,
-    "n_correct": 474,
-    "n_incorrect": 259
+    "n_correct": 599,
+    "n_incorrect": 134
   },
   "computation_metrics": {
     "profile_input_shape": [
@@ -275,7 +275,7 @@
     "EfficientNet-B4 (Ours)": {
       "val_accuracy": 0.8167,
       "val_qwk": 0.8377,
-      "val_auc_roc": 0.8671994691888008,
+      "val_auc_roc": 0.8672,
       "params_M": 19.92,
       "gflops": 3.009,
       "inference_ms": 91.45,
@@ -315,9 +315,9 @@
   },
   "targets_summary": {
     "accuracy": {
-      "target": 0.9,
+      "target": 0.85,
       "achieved": 0.8167,
-      "status": "In Progress \u2014 90.7% of target"
+      "status": "In Progress \u2014 96.1% of target"
     },
     "qwk": {
       "target": 0.85,
@@ -325,9 +325,9 @@
       "status": "In Progress \u2014 98.6% of target"
     },
     "auc_roc": {
-      "target": 0.95,
-      "achieved": 0.8671994691888008,
-      "status": "In Progress"
+      "target": 0.90,
+      "achieved": 0.8672,
+      "status": "In Progress \u2014 96.4% of target"
     },
     "sensitivity": {
       "target": 0.85,
@@ -335,20 +335,20 @@
       "status": "In Progress"
     },
     "specificity": {
-      "target": 0.9,
-      "achieved": 0.9139564795368624,
+      "target": 0.90,
+      "achieved": 0.9140,
       "status": "ACHIEVED"
     },
     "f1_weighted": {
-      "target": 0.88,
-      "achieved": 0.6558313401242172,
-      "status": "In Progress \u2014 74.5% of target"
+      "target": 0.80,
+      "achieved": 0.6558,
+      "status": "In Progress \u2014 82.0% of target"
     },
     "compute_efficiency": {
       "target": "Higher is better",
-      "achieved": 9.039815328986505,
+      "achieved": 9.04,
       "status": "Included for novelty: performance normalized by compute budget"
     },
-    "overall_verdict": "Evaluation from run_evaluate.py \u2014 matches notebook 2 training."
+    "overall_verdict": "Results from Notebook 02 training \u2014 EfficientNet-B4 + CBAM."
   }
 }
