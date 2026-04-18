@@ -88,42 +88,55 @@ CLINICAL_NOTES = [
 # ───────────────────────────────────────────────────────────────
 
 @st.cache_resource(show_spinner=False)
-def load_model():
+def load_model(ckpt_path: Optional[str] = None):
     """Load the trained EfficientNet-B4 + CBAM model (or a random-init
     fallback if the checkpoint is missing). Also reads the image size
     actually used during training from the checkpoint so inference
-    matches the validation pipeline."""
+    matches the validation pipeline.
+
+    Passing a non-default `ckpt_path` creates a new cache entry, so this
+    is the right hook for "override checkpoint" in the UI.
+    """
     import torch as _torch
 
     from config import MODEL_CONFIG, get_device
     from models.efficientnet_model import load_efficientnet_dr_from_checkpoint
 
+    path = Path(ckpt_path) if ckpt_path else CKPT_PATH
+
     device = get_device()
     train_img_size = 224
-    if CKPT_PATH.exists():
-        model, _ = load_efficientnet_dr_from_checkpoint(
-            CKPT_PATH,
-            map_location=device,
-            num_classes=5,
-            dropout=float(MODEL_CONFIG.get("dropout", 0.4)),
-            use_attention=True,
-            weights_only=False,
-        )
-        loaded = True
-        # Peek at the checkpoint to recover the training image size so the
-        # Streamlit preprocessing pipeline matches the one used during
-        # validation (otherwise the softmax collapses to ~uniform 20%).
+    load_error = None
+    if path.exists():
         try:
-            ckpt = _torch.load(CKPT_PATH, map_location="cpu", weights_only=False)
-            cfg = (ckpt or {}).get("config", {}) or {}
-            phases = cfg.get("phases", {}) or {}
-            sizes = [ph.get("img_size") for ph in phases.values() if ph.get("img_size")]
-            if sizes:
-                train_img_size = int(sizes[-1])  # last phase = final training size
-            del ckpt
-        except Exception:                                   # noqa: BLE001
-            pass
-    else:
+            model, _ = load_efficientnet_dr_from_checkpoint(
+                path,
+                map_location=device,
+                num_classes=5,
+                dropout=float(MODEL_CONFIG.get("dropout", 0.4)),
+                use_attention=True,
+                weights_only=False,
+            )
+            loaded = True
+        except Exception as e:                                  # noqa: BLE001
+            load_error = str(e)
+            loaded = False
+        if loaded:
+            # Peek at the checkpoint to recover the training image size so the
+            # Streamlit preprocessing pipeline matches the one used during
+            # validation (otherwise the softmax collapses to ~uniform 20%).
+            try:
+                ckpt = _torch.load(path, map_location="cpu", weights_only=False)
+                cfg = (ckpt or {}).get("config", {}) or {}
+                phases = cfg.get("phases", {}) or {}
+                sizes = [ph.get("img_size") for ph in phases.values() if ph.get("img_size")]
+                if sizes:
+                    train_img_size = int(sizes[-1])  # last phase = final training size
+                del ckpt
+            except Exception:                                   # noqa: BLE001
+                pass
+
+    if not path.exists() or load_error is not None:
         from models.efficientnet_model import EfficientNetDR
         model = EfficientNetDR(
             num_classes=5,
@@ -135,7 +148,7 @@ def load_model():
         loaded = False
 
     model.eval()
-    return model, device, loaded, train_img_size
+    return model, device, loaded, train_img_size, str(path), load_error
 
 
 @st.cache_data(show_spinner=False)
@@ -964,20 +977,67 @@ def tab_about(model_loaded: bool, device) -> None:
 # APP ENTRY POINT
 # ───────────────────────────────────────────────────────────────
 
-def _sidebar_settings(model_loaded: bool, device, train_img_size: int) -> dict:
+def _sidebar_settings(
+    model_loaded    : bool,
+    device          ,
+    train_img_size  : int,
+    active_ckpt_path: str,
+) -> dict:
     st.sidebar.markdown("## Settings")
+
+    active_ckpt = Path(active_ckpt_path)
+    ckpt_exists_now = active_ckpt.exists()
 
     if model_loaded:
         st.sidebar.success(
             f"Model loaded on **{device}** "
             f"(training size **{train_img_size}x{train_img_size}**)"
         )
+    elif ckpt_exists_now:
+        st.sidebar.warning(
+            "A checkpoint exists on disk but the cached model object is "
+            "still the random-init fallback. Click **Reload model** below."
+        )
     else:
         st.sidebar.error(
-            f"**Random-init model on {device}** — every prediction will be "
-            "~20% on a random class. Place a trained checkpoint at "
-            "`results/models/model_best_qwk.pth` and click *Reload model* below."
+            f"**Random-init model on {device}** — predictions will be "
+            "~20% per class.  No checkpoint was found at the expected path "
+            "(shown below).  Put a trained `.pth` there, or use the picker "
+            "to point the app at a different file."
         )
+
+    with st.sidebar.expander("Checkpoint diagnostics"):
+        st.code(
+            f"PROJECT_ROOT      = {PROJECT_ROOT}\n"
+            f"Default CKPT_PATH = {CKPT_PATH}\n"
+            f"Active checkpoint = {active_ckpt}\n"
+            f"exists            = {ckpt_exists_now}\n"
+            f"model_loaded      = {model_loaded}\n"
+            f"device            = {device}\n"
+            f"train_img_size    = {train_img_size}",
+            language="text",
+        )
+        alt_models_dir = PROJECT_ROOT / "results" / "models"
+        pths: list[str] = []
+        if alt_models_dir.exists():
+            pths = sorted(str(p) for p in alt_models_dir.glob("*.pth"))
+        st.caption(f"`.pth` files in `{alt_models_dir}`:")
+        for p in pths:
+            st.write(f"- `{p}`")
+        if not pths:
+            st.write("(none)")
+
+        options = ["(default)"] + pths
+        current = st.session_state.get("ckpt_override") or "(default)"
+        choice = st.selectbox(
+            "Override checkpoint", options=options,
+            index=options.index(current) if current in options else 0,
+        )
+        if st.button("Apply override", use_container_width=True):
+            st.session_state["ckpt_override"] = None if choice == "(default)" else choice
+            st.cache_resource.clear()
+            st.cache_data.clear()
+            st.rerun()
 
     if st.sidebar.button("Reload model / clear cache", use_container_width=True):
         st.cache_resource.clear()
@@ -1047,8 +1107,14 @@ def main() -> None:
         "Grad-CAM explanations, uncertainty analysis and batch screening."
     )
 
-    model, device, model_loaded, train_img_size = load_model()
-    settings = _sidebar_settings(model_loaded, device, train_img_size)
+    override_path = st.session_state.get("ckpt_override")
+    model, device, model_loaded, train_img_size, active_ckpt, load_err = \
+        load_model(override_path)
+    if load_err:
+        st.sidebar.error(f"Checkpoint load failed: {load_err}")
+    settings = _sidebar_settings(
+        model_loaded, device, train_img_size, active_ckpt,
+    )
 
     tabs = st.tabs(
         ["Analysis", "Batch", "Performance", "Figures", "About"]
