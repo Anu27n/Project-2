@@ -873,6 +873,30 @@ def tab_figures() -> None:
         st.caption(f"`{p.relative_to(PROJECT_ROOT)}`")
 
 
+@st.cache_data(show_spinner=False)
+def _checkpoint_signature() -> Optional[Dict[str, object]]:
+    """Summarise the checkpoint so we can confirm the correct weights are
+    actually in memory (not a stale random-init fallback)."""
+    if not CKPT_PATH.exists():
+        return None
+    try:
+        import torch as _t
+        ck = _t.load(CKPT_PATH, map_location="cpu", weights_only=False)
+        sd = ck.get("model_state_dict", {}) or {}
+        total = sum(v.numel() for v in sd.values()
+                    if hasattr(v, "numel"))
+        any_w = next(iter(sd.values())) if sd else None
+        checksum = float(any_w.float().mean()) if any_w is not None else None
+        return {
+            "epoch"   : ck.get("epoch"),
+            "best_qwk": ck.get("best_qwk"),
+            "params"  : total,
+            "mean_w0" : checksum,
+        }
+    except Exception:                                       # noqa: BLE001
+        return None
+
+
 def tab_about(model_loaded: bool, device) -> None:
     st.subheader("About this tool")
     st.markdown(
@@ -909,17 +933,31 @@ def tab_about(model_loaded: bool, device) -> None:
         """
     )
 
+    sig = _checkpoint_signature()
     meta = pd.DataFrame({
         "Item"  : ["Checkpoint loaded", "Inference device",
-                   "Checkpoint path", "Metrics JSON"],
+                   "Checkpoint path", "Metrics JSON",
+                   "Checkpoint epoch", "Checkpoint best QWK",
+                   "Total weight tensors (M params)",
+                   "First-tensor mean (sanity check)"],
         "Value" : [
             "Yes" if model_loaded else "No (using random-init fallback)",
             str(device),
             str(CKPT_PATH.relative_to(PROJECT_ROOT)),
             str(METRICS_FILE.relative_to(PROJECT_ROOT)),
+            str(sig.get("epoch")) if sig else "-",
+            f"{sig.get('best_qwk'):.4f}" if sig and sig.get("best_qwk") else "-",
+            f"{(sig.get('params') or 0) / 1e6:.2f}" if sig else "-",
+            f"{sig.get('mean_w0'):.6f}" if sig and sig.get("mean_w0") is not None else "-",
         ],
     })
     st.dataframe(meta, hide_index=True, use_container_width=True)
+    st.caption(
+        "If predictions look like a constant ~20% on a single class, click "
+        "**Reload model / clear cache** in the sidebar: Streamlit's resource "
+        "cache can keep an old model object in memory after source edits or "
+        "checkpoint changes."
+    )
 
 
 # ───────────────────────────────────────────────────────────────
@@ -935,11 +973,16 @@ def _sidebar_settings(model_loaded: bool, device, train_img_size: int) -> dict:
             f"(training size **{train_img_size}x{train_img_size}**)"
         )
     else:
-        st.sidebar.warning(
-            f"Using random-init model on **{device}** — results are "
-            "meaningless until a checkpoint is placed at "
-            "`results/models/model_best_qwk.pth`."
+        st.sidebar.error(
+            f"**Random-init model on {device}** — every prediction will be "
+            "~20% on a random class. Place a trained checkpoint at "
+            "`results/models/model_best_qwk.pth` and click *Reload model* below."
         )
+
+    if st.sidebar.button("Reload model / clear cache", use_container_width=True):
+        st.cache_resource.clear()
+        st.cache_data.clear()
+        st.rerun()
 
     # The model MUST see the same resolution it was trained at. Allowing a
     # mismatched slider value here caused near-uniform 20% predictions in
