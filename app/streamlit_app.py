@@ -90,11 +90,16 @@ CLINICAL_NOTES = [
 @st.cache_resource(show_spinner=False)
 def load_model():
     """Load the trained EfficientNet-B4 + CBAM model (or a random-init
-    fallback if the checkpoint is missing)."""
+    fallback if the checkpoint is missing). Also reads the image size
+    actually used during training from the checkpoint so inference
+    matches the validation pipeline."""
+    import torch as _torch
+
     from config import MODEL_CONFIG, get_device
     from models.efficientnet_model import load_efficientnet_dr_from_checkpoint
 
     device = get_device()
+    train_img_size = 224
     if CKPT_PATH.exists():
         model, _ = load_efficientnet_dr_from_checkpoint(
             CKPT_PATH,
@@ -105,6 +110,19 @@ def load_model():
             weights_only=False,
         )
         loaded = True
+        # Peek at the checkpoint to recover the training image size so the
+        # Streamlit preprocessing pipeline matches the one used during
+        # validation (otherwise the softmax collapses to ~uniform 20%).
+        try:
+            ckpt = _torch.load(CKPT_PATH, map_location="cpu", weights_only=False)
+            cfg = (ckpt or {}).get("config", {}) or {}
+            phases = cfg.get("phases", {}) or {}
+            sizes = [ph.get("img_size") for ph in phases.values() if ph.get("img_size")]
+            if sizes:
+                train_img_size = int(sizes[-1])  # last phase = final training size
+            del ckpt
+        except Exception:                                   # noqa: BLE001
+            pass
     else:
         from models.efficientnet_model import EfficientNetDR
         model = EfficientNetDR(
@@ -117,7 +135,7 @@ def load_model():
         loaded = False
 
     model.eval()
-    return model, device, loaded
+    return model, device, loaded, train_img_size
 
 
 @st.cache_data(show_spinner=False)
@@ -146,11 +164,16 @@ def _decode_image(image_bytes: bytes) -> np.ndarray:
 
 def preprocessing_stages(
     img_rgb : np.ndarray,
-    img_size: int = 512,
+    img_size: int = 224,
 ) -> Dict[str, np.ndarray]:
     """
     Return every intermediate stage of the fundus preprocessing
     pipeline as uint8 RGB images (for visualisation).
+
+    IMPORTANT: the final stage fed to the model is "Circle mask" (no
+    CLAHE baked in here), because validation during training applied
+    CLAHE inside the Albumentations pipeline. The visual CLAHE stage
+    is shown only for context.
     """
     from preprocessing import DRPreprocessor
 
@@ -170,23 +193,24 @@ def preprocessing_stages(
     circled = pre.circle_crop(ben.copy())
     stages["Circle mask"] = circled
 
-    clahe_out = pre.apply_clahe(circled.copy())
-    stages["CLAHE"] = clahe_out
+    # Visual-only: CLAHE applied inside OpenCV LAB space (same math as the
+    # albumentations stage, minus the final Normalize + ToTensor).
+    stages["CLAHE (preview)"] = pre.apply_clahe(circled.copy())
 
     return stages
 
 
-def build_tensor(processed_uint8: np.ndarray, device) -> torch.Tensor:
-    """Normalise and tensor-ise the final preprocessed image."""
-    import albumentations as A
-    from albumentations.pytorch import ToTensorV2
+def build_tensor(
+    processed_uint8: np.ndarray,
+    device,
+    img_size: int = 224,
+) -> torch.Tensor:
+    """Build the input tensor using the exact validation transform used
+    during training (A.Resize -> A.CLAHE -> A.Normalize -> ToTensorV2)."""
+    from dataset import get_valid_transforms
 
-    transform = A.Compose([
-        A.Resize(512, 512),
-        A.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-        ToTensorV2(),
-    ])
-    tensor = transform(image=processed_uint8)["image"].unsqueeze(0).to(device)
+    tfm = get_valid_transforms(img_size=img_size, use_clahe=True)
+    tensor = tfm(image=processed_uint8)["image"].unsqueeze(0).to(device)
     return tensor
 
 
@@ -474,9 +498,15 @@ def tab_analysis(model, device, settings: dict) -> None:
 
     with st.spinner("Running pipeline and inference..."):
         stages    = preprocessing_stages(original, img_size=settings["img_size"])
-        processed = stages["CLAHE"]
-        tensor    = build_tensor(processed, device)
-        probs     = predict(tensor, model)
+        # Model input must match training: circle-mask stage (pre-CLAHE),
+        # then Albumentations Resize + CLAHE + Normalize inside build_tensor.
+        model_input = stages["Circle mask"]
+        tensor      = build_tensor(
+            model_input, device, img_size=settings["img_size"]
+        )
+        probs       = predict(tensor, model)
+        # 'processed' is what we show as the Grad-CAM base (with CLAHE).
+        processed   = stages["CLAHE (preview)"]
 
     pred = int(np.argmax(probs))
     conf = float(probs[pred])
@@ -629,8 +659,13 @@ def tab_batch(model, device, settings: dict) -> None:
     for i, f in enumerate(files):
         try:
             img   = _decode_image(f.read())
-            proc  = preprocessing_stages(img, img_size=settings["img_size"])["CLAHE"]
-            probs = predict(build_tensor(proc, device), model)
+            proc  = preprocessing_stages(
+                img, img_size=settings["img_size"]
+            )["Circle mask"]
+            probs = predict(
+                build_tensor(proc, device, img_size=settings["img_size"]),
+                model,
+            )
             pred  = int(np.argmax(probs))
             q     = image_quality(img)
             qual, _ = quality_verdict(q)
@@ -891,11 +926,14 @@ def tab_about(model_loaded: bool, device) -> None:
 # APP ENTRY POINT
 # ───────────────────────────────────────────────────────────────
 
-def _sidebar_settings(model_loaded: bool, device) -> dict:
+def _sidebar_settings(model_loaded: bool, device, train_img_size: int) -> dict:
     st.sidebar.markdown("## Settings")
 
     if model_loaded:
-        st.sidebar.success(f"Model loaded on **{device}**")
+        st.sidebar.success(
+            f"Model loaded on **{device}** "
+            f"(training size **{train_img_size}x{train_img_size}**)"
+        )
     else:
         st.sidebar.warning(
             f"Using random-init model on **{device}** — results are "
@@ -903,7 +941,20 @@ def _sidebar_settings(model_loaded: bool, device) -> dict:
             "`results/models/model_best_qwk.pth`."
         )
 
-    img_size = st.sidebar.slider("Preprocessing image size", 256, 600, 512, 32)
+    # The model MUST see the same resolution it was trained at. Allowing a
+    # mismatched slider value here caused near-uniform 20% predictions in
+    # earlier versions of the app.
+    st.sidebar.caption(
+        "Inference uses the training image size baked into the "
+        "checkpoint; override only if you know what you are doing."
+    )
+    override = st.sidebar.checkbox("Override inference size", value=False)
+    if override:
+        img_size = st.sidebar.slider(
+            "Preprocessing image size", 160, 512, train_img_size, 16
+        )
+    else:
+        img_size = int(train_img_size)
 
     st.sidebar.markdown("### Grad-CAM")
     colormap = st.sidebar.selectbox(
@@ -953,8 +1004,8 @@ def main() -> None:
         "Grad-CAM explanations, uncertainty analysis and batch screening."
     )
 
-    model, device, model_loaded = load_model()
-    settings = _sidebar_settings(model_loaded, device)
+    model, device, model_loaded, train_img_size = load_model()
+    settings = _sidebar_settings(model_loaded, device, train_img_size)
 
     tabs = st.tabs(
         ["Analysis", "Batch", "Performance", "Figures", "About"]
