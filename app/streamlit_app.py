@@ -26,6 +26,7 @@ Usage:
 from __future__ import annotations
 
 import json
+import os
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -50,6 +51,10 @@ if str(SRC_DIR) not in sys.path:
 FIGURES_DIR  = PROJECT_ROOT / "results" / "figures"
 METRICS_FILE = PROJECT_ROOT / "results" / "metrics" / "final_evaluation_results.json"
 CKPT_PATH    = PROJECT_ROOT / "results" / "models" / "model_best_qwk.pth"
+# Writable location we can use to cache an uploaded / downloaded checkpoint
+# when the default one is missing (e.g. on Streamlit Cloud, where the repo
+# does not include the 68 MB .pth file).
+RUNTIME_CKPT_DIR = Path(os.environ.get("DR_CKPT_CACHE", "/tmp/dr_ckpt"))
 
 # ───────────────────────────────────────────────────────────────
 # CLINICAL CONSTANTS
@@ -86,6 +91,52 @@ CLINICAL_NOTES = [
 # ───────────────────────────────────────────────────────────────
 # CACHED LOADERS
 # ───────────────────────────────────────────────────────────────
+
+# ───────────────────────────────────────────────────────────────
+# REMOTE / UPLOADED CHECKPOINT
+# ───────────────────────────────────────────────────────────────
+
+def _get_secret(name: str) -> Optional[str]:
+    """Safely read an st.secret or env var without crashing if no
+    secrets.toml is configured (the default on Streamlit Cloud)."""
+    try:
+        val = st.secrets.get(name)  # type: ignore[attr-defined]
+        if val:
+            return str(val)
+    except Exception:                                       # noqa: BLE001
+        pass
+    return os.environ.get(name)
+
+
+@st.cache_resource(show_spinner=True)
+def _download_checkpoint(url: str, dest: str) -> str:
+    """Fetch a remote .pth into the local cache (idempotent)."""
+    dest_path = Path(dest)
+    dest_path.parent.mkdir(parents=True, exist_ok=True)
+    if dest_path.exists() and dest_path.stat().st_size > 1_000_000:
+        return str(dest_path)
+
+    import urllib.request
+
+    tmp = dest_path.with_suffix(dest_path.suffix + ".part")
+    with urllib.request.urlopen(url) as resp, open(tmp, "wb") as out:
+        while True:
+            chunk = resp.read(1 << 20)
+            if not chunk:
+                break
+            out.write(chunk)
+    tmp.replace(dest_path)
+    return str(dest_path)
+
+
+def _persist_uploaded_checkpoint(uploaded_file) -> str:
+    """Persist an uploaded .pth to RUNTIME_CKPT_DIR and return its path."""
+    RUNTIME_CKPT_DIR.mkdir(parents=True, exist_ok=True)
+    dest = RUNTIME_CKPT_DIR / uploaded_file.name
+    with open(dest, "wb") as f:
+        f.write(uploaded_file.getbuffer())
+    return str(dest)
+
 
 @st.cache_resource(show_spinner=False)
 def load_model(ckpt_path: Optional[str] = None):
@@ -1027,6 +1078,13 @@ def _sidebar_settings(
         if not pths:
             st.write("(none)")
 
+        # Include any cached / uploaded checkpoints so they show up here too
+        if RUNTIME_CKPT_DIR.exists():
+            pths.extend(sorted(
+                str(p) for p in RUNTIME_CKPT_DIR.glob("*.pth")
+                if str(p) not in pths
+            ))
+
         options = ["(default)"] + pths
         current = st.session_state.get("ckpt_override") or "(default)"
         choice = st.selectbox(
@@ -1034,7 +1092,29 @@ def _sidebar_settings(
             index=options.index(current) if current in options else 0,
         )
         if st.button("Apply override", use_container_width=True):
-            st.session_state["ckpt_override"] = None if choice == "(default)" else choice
+            st.session_state["ckpt_override"] = (
+                None if choice == "(default)" else choice
+            )
+            st.cache_resource.clear()
+            st.cache_data.clear()
+            st.rerun()
+
+        st.markdown("---")
+        st.caption(
+            "On Streamlit Cloud the repo does not ship `.pth` weights "
+            "(they're in `.gitignore`). Upload the file here, or set "
+            "`CHECKPOINT_URL` in **Settings → Secrets** to a direct "
+            "download URL (Hugging Face Hub, GitHub Releases, etc.)."
+        )
+        up = st.file_uploader(
+            "Upload `model_best_qwk.pth`",
+            type=["pth", "pt", "ckpt"],
+            key="ckpt_upload",
+        )
+        if up is not None and st.button("Use uploaded checkpoint",
+                                        use_container_width=True):
+            saved = _persist_uploaded_checkpoint(up)
+            st.session_state["ckpt_override"] = saved
             st.cache_resource.clear()
             st.cache_data.clear()
             st.rerun()
@@ -1107,7 +1187,21 @@ def main() -> None:
         "Grad-CAM explanations, uncertainty analysis and batch screening."
     )
 
+    # Auto-download from a URL configured via st.secrets or env var, if the
+    # default checkpoint is missing in the deployed file tree.
     override_path = st.session_state.get("ckpt_override")
+    if override_path is None and not CKPT_PATH.exists():
+        url = _get_secret("CHECKPOINT_URL")
+        if url:
+            try:
+                downloaded = _download_checkpoint(
+                    url, str(RUNTIME_CKPT_DIR / "model_best_qwk.pth"),
+                )
+                override_path = downloaded
+                st.session_state["ckpt_override"] = downloaded
+            except Exception as e:                              # noqa: BLE001
+                st.sidebar.error(f"Checkpoint download failed: {e}")
+
     model, device, model_loaded, train_img_size, active_ckpt, load_err = \
         load_model(override_path)
     if load_err:
