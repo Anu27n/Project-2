@@ -7,27 +7,27 @@
   "total_epochs": 28,
   "best_checkpoint_epoch": 28,
   "overall_metrics": {
-    "accuracy": 0.8167,
-    "quadratic_weighted_kappa": 0.8377,
-    "auc_roc_macro": 0.8672,
-    "auc_roc_weighted": 0.9045,
+    "accuracy": 0.7763,
+    "quadratic_weighted_kappa": 0.8406,
+    "auc_roc_macro": 0.9112,
+    "auc_roc_weighted": 0.9341,
     "f1_score_macro": 0.4859,
     "f1_score_weighted": 0.6558,
-    "f1_score_micro": 0.8167,
+    "f1_score_micro": 0.7763,
     "precision_macro": 0.5073,
     "precision_weighted": 0.7195,
     "recall_macro": 0.7232,
-    "recall_weighted": 0.8167,
+    "recall_weighted": 0.7763,
     "mean_sensitivity": 0.7232,
-    "mean_specificity": 0.9140,
-    "top2_accuracy": 0.8431,
+    "mean_specificity": 0.914,
+    "top2_accuracy": 0.8949,
     "avg_precision_macro": 0.5117,
     "accuracy_per_gflop": 0.2714,
     "qwk_per_gflop": 0.2784,
     "computation_efficiency_score": 9.04,
     "n_samples": 733,
-    "n_correct": 599,
-    "n_incorrect": 134
+    "n_correct": 569,
+    "n_incorrect": 164
   },
   "computation_metrics": {
     "profile_input_shape": [
@@ -220,7 +220,7 @@
     ]
   },
   "qwk_analysis": {
-    "qwk_score": 0.8377,
+    "qwk_score": 0.8406,
     "interpretation": "Almost Perfect",
     "clinical_target": 0.85,
     "target_achieved": false,
@@ -316,18 +316,18 @@
   "targets_summary": {
     "accuracy": {
       "target": 0.85,
-      "achieved": 0.8167,
-      "status": "In Progress \u2014 96.1% of target"
+      "achieved": 0.7763,
+      "status": "In Progress - 91.3% of target"
     },
     "qwk": {
       "target": 0.85,
-      "achieved": 0.8377,
-      "status": "In Progress \u2014 98.6% of target"
+      "achieved": 0.8406,
+      "status": "In Progress - 98.9% of target"
     },
     "auc_roc": {
-      "target": 0.90,
-      "achieved": 0.8672,
-      "status": "In Progress \u2014 96.4% of target"
+      "target": 0.9,
+      "achieved": 0.9112,
+      "status": "ACHIEVED"
     },
     "sensitivity": {
       "target": 0.85,
@@ -335,12 +335,12 @@
       "status": "In Progress"
     },
     "specificity": {
-      "target": 0.90,
-      "achieved": 0.9140,
+      "target": 0.9,
+      "achieved": 0.914,
       "status": "ACHIEVED"
     },
     "f1_weighted": {
-      "target": 0.80,
+      "target": 0.8,
       "achieved": 0.6558,
       "status": "In Progress \u2014 82.0% of target"
     },

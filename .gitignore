@@ -52,3 +52,12 @@ runs/
 # Secrets
 kaggle.json
 .env
+
+# Word reports ( locall files; not tracked)
+*.doc
+*.docx
+
+# Report build / TOC automation (local tooling; not tracked)
+build_final_report.py
+build_guide_report.py
+fix_toc_page_numbers.py
